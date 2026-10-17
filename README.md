@@ -29,6 +29,21 @@ conversion), Google Chrome not needed, Telegram token only if the plugin path is
 `onnx` is needed at conversion time only; the runtime uses onnxruntime.
 The book is not in the repo (copyright); without it the index is built from `devices.json` only.
 
+### Books in the corpus
+
+`rag_build.py` ingests every book it finds locally: `psychology/*.fb2` (chunked by FB2
+paragraphs with section titles) and `psychology/books/*.jsonl`. A PDF is added by
+
+```bash
+python3 scripts/book_ingest_pdf.py "<book>.pdf" --source "Автор «Название»"
+python3 scripts/rag_build.py   # rebuild the index over all books
+```
+
+Merging, not appending: at build time a chunk whose embedding is ≥ 0.90 cosine to an
+already-kept document is dropped as a duplicate, so only non-overlapping material from
+the new book enters the index. Retrieval also reserves slots for the two best-scoring
+device definitions, so prose from a large corpus cannot crowd them out of top-k.
+
 ## Model version and updates
 
 `psychology/models/model_version.json` stores the model id, the revision the ONNX was built from
@@ -60,9 +75,11 @@ psychology/devices.json          closed device list
 psychology/markers.json          surface markers per device family
 psychology/taxonomy_map.json     SemEval labels -> our devices
 psychology/models/               ONNX int8 + tokenizer + labels + thresholds + model_version.json
+psychology/books/                extracted book paragraphs (JSONL, git-ignored)
 references/manipulation-devices.md
 references/classifier-layer.md
 scripts/markers.py classifier.py rag_core.py rag_build.py rag_query.py rag_mcp.py
+scripts/book_ingest_pdf.py
 scripts/model_setup.py model_update_check.py model_update_run.py model_promote.py setup.sh
 plugin/psych-rag/                pre_gateway_dispatch hook (no core patch)
 ```

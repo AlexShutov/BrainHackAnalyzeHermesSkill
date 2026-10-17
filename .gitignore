@@ -1,7 +1,9 @@
 # не коммитим: веса модели, индекс, кэш и книжные файлы (авторские права)
 psychology/models/
 psychology/rag/
+psychology/books/
 psychology/*.fb2
+psychology/*.pdf
 psychology/*.txt
 __pycache__/
 *.log

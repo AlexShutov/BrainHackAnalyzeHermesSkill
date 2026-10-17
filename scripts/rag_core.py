@@ -108,4 +108,19 @@ def search(query, top_k=TOP_K, min_score=MIN_SCORE, con=None, qvec=None):
             break
         total += cost
         out.append({"id": doc_id, "kind": kind, "label": label, "score": round(score, 3), "snippet": sn})
+    # a big corpus lets prose chunks crowd device definitions out of top-k; the
+    # definitions are the point of retrieval, so reserve slots for the two best
+    # devices above a floor even when chunks outrank them
+    if sum(1 for r in out if r["kind"] == "device") < 2:
+        have = {r["id"] for r in out}
+        spare = [ (doc_id, score) for doc_id, score in ranked
+                  if doc_id not in have and score >= 0.20
+                  and con.execute("SELECT kind FROM docs WHERE id=?", (doc_id,)).fetchone()[0] == "device" ]
+        for doc_id, score in spare[: 2 - sum(1 for r in out if r["kind"] == "device")]:
+            kind, label, text = con.execute("SELECT kind, label, text FROM docs WHERE id=?", (doc_id,)).fetchone()
+            sn = snippet(text)
+            if total + len(sn) + len(label) + 20 > MAX_OUT_CHARS:
+                break
+            total += len(sn) + len(label) + 20
+            out.append({"id": doc_id, "kind": kind, "label": label, "score": round(score, 3), "snippet": sn})
     return out
