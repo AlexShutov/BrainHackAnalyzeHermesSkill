@@ -83,14 +83,20 @@ def main():
         converted = "exported from weights"
 
     if a.quantize and not a.no_quantize:
+        import shutil
         from onnxruntime.quantization import quantize_dynamic, QuantType
         raw = os.path.join(out, "classifier.onnx")
         q = os.path.join(out, "classifier_int8.onnx")
         quantize_dynamic(raw, q, weight_type=QuantType.QInt8)
-        # the fp32 graph and any external-data leftovers are not needed after quantization
+        # keep only the int8 graph; drop the fp32 graph and any external-data leftovers
         for f in os.listdir(out):
-            if f != os.path.basename(q):
-                os.remove(os.path.join(out, f))
+            p = os.path.join(out, f)
+            if f == os.path.basename(q):
+                continue
+            if os.path.isdir(p):
+                shutil.rmtree(p)
+            else:
+                os.remove(p)
         final = q
     else:
         final = os.path.join(out, "classifier.onnx")
