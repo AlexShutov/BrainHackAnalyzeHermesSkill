@@ -100,7 +100,7 @@ def main():
 
     info = {
         "model_id": a.model_id,
-        "revision": a.revision or "",
+        "revision": a.revision or _sha(a.model_id) or "",
         "resolved_sha": _sha(a.model_id),
         "format": "onnx-int8" if a.quantize and not a.no_quantize else "onnx",
         "runtime": "onnxruntime (CPUExecutionProvider)",
