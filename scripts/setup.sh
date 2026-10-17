@@ -28,7 +28,7 @@ echo "1/4 venv: $VENV (python $PYBIN)"
 if [ ! -x "$VENV/bin/python" ]; then
   "$PYBIN" -m venv "$VENV"
 fi
-"$VENV/bin/pip" install --quiet numpy onnxruntime tokenizers huggingface_hub requests fastembed
+"$VENV/bin/pip" install --quiet numpy onnxruntime tokenizers huggingface_hub requests fastembed pypdf
 # torch + onnx are export-time dependencies only — the runtime path never imports them.
 # Skip them with SKIP_TORCH=1 if already installed or if the model ships an ONNX export.
 if [ "${SKIP_TORCH:-0}" != "1" ]; then
