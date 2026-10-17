@@ -14,7 +14,7 @@ import json, os, subprocess, time
 
 HOME = os.environ.get("HERMES_HOME") or os.path.expanduser("~/.hermes")
 SKILL = "message-text-analysis"
-SKILL_DIR = os.path.join(HOME, "skills", SKILL)
+SKILL_DIR = os.environ.get("PSYCH_SKILL_DIR") or os.path.join(HOME, "skills", SKILL)
 RAG_PY = os.environ.get("PSYCH_RAG_PY", os.path.join(HOME, "tools", "psych-rag-env", "bin", "python"))
 QUERY = SKILL_DIR + "/scripts/rag_query.py"
 MARKERS = SKILL_DIR + "/scripts/markers.py"
