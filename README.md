@@ -23,8 +23,10 @@ git clone https://github.com/AlexShutov/PsychAnalysisHermesSkill ~/.hermes/skill
 bash ~/.hermes/skills/message-text-analysis/scripts/setup.sh
 ```
 
-Requirements: python3, network access for the model download (~1.1 GB weights, ~550 MB after
+Requirements: CPython 3.11–3.14 (onnxruntime has no wheels for newer versions; setup.sh picks a
+supported interpreter), network access for the model download (~1.1 GB weights, ~550 MB after
 conversion), Google Chrome not needed, Telegram token only if the plugin path is used.
+`onnx` is needed at conversion time only; the runtime uses onnxruntime.
 The book is not in the repo (copyright); without it the index is built from `devices.json` only.
 
 ## Model version and updates

@@ -29,12 +29,12 @@ if [ ! -x "$VENV/bin/python" ]; then
   "$PYBIN" -m venv "$VENV"
 fi
 "$VENV/bin/pip" install --quiet numpy onnxruntime tokenizers huggingface_hub requests
-# torch is an export-time dependency only — the runtime path never imports it.
-# Skip it with SKIP_TORCH=1 if it is already installed or the model ships an ONNX export.
+# torch + onnx are export-time dependencies only — the runtime path never imports them.
+# Skip them with SKIP_TORCH=1 if already installed or if the model ships an ONNX export.
 if [ "${SKIP_TORCH:-0}" != "1" ]; then
-  "$VENV/bin/pip" install --quiet torch transformers
+  "$VENV/bin/pip" install --quiet torch transformers onnx
 else
-  echo "  torch пропущен (SKIP_TORCH=1) — экспорт не выполнится, нужен готовый ONNX-экспорт модели"
+  echo "  torch/onnx пропущены (SKIP_TORCH=1) — экспорт не выполнится, нужен готовый ONNX-экспорт модели"
 fi
 
 echo "2/4 weights: download + convert to ONNX int8"
