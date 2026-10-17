@@ -7,9 +7,26 @@ HERMES_HOME="${HERMES_HOME:-$HOME/.hermes}"
 SKILL="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 VENV="${PSYCH_RAG_VENV:-$HERMES_HOME/tools/psych-rag-env}"
 
-echo "1/4 venv: $VENV"
+# onnxruntime ships wheels only for CPython 3.11-3.14; a newer interpreter breaks the install.
+pick_python() {
+  for p in python3.13 python3.12 python3.11 python3.14 python3; do
+    command -v "$p" >/dev/null || continue
+    v="$($p -c 'import sys; print("%d.%d" % sys.version_info[:2])')"
+    case "$v" in 3.11|3.12|3.13|3.14) echo "$p"; return 0;; esac
+  done
+  return 1
+}
+
+PYBIN="$(pick_python || true)"
+if [ -z "$PYBIN" ]; then
+  echo "Нужен CPython 3.11-3.14 (onnxruntime не имеет колёс для более новых версий)." >&2
+  echo "Текущий python3: $(python3 -c 'import sys; print("%d.%d" % sys.version_info[:2])' 2>/dev/null || echo '?')" >&2
+  exit 1
+fi
+
+echo "1/4 venv: $VENV (python $PYBIN)"
 if [ ! -x "$VENV/bin/python" ]; then
-  python3 -m venv "$VENV"
+  "$PYBIN" -m venv "$VENV"
 fi
 "$VENV/bin/pip" install --quiet numpy onnxruntime tokenizers huggingface_hub requests
 # torch is an export-time dependency only — the runtime path never imports it.
