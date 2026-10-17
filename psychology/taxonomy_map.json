@@ -1,0 +1,30 @@
+{
+  "note": "Классификатор работает по таксономии SemEval-2023/2024 (25 propaganda-меток). Это независимое второе мнение: он говорит, какой приём в абзаце есть по данным разметки, а не по определению из нашего списка. Здесь — соответствие нашим устройствам; пустое поле = прямого аналога нет.",
+  "labels": {
+    "Appeal_to_Authority": {"ru": "апелляция к авторитету", "device": "Апелляция к авторитету"},
+    "Appeal_to_Popularity": {"ru": "апелляция к большинству", "device": "Апелляция к большинству (ad populum)"},
+    "Appeal_to_Values": {"ru": "апелляция к ценностям", "device": "Апелляция к ценностям"},
+    "Appeal_to_Fear-Prejudice": {"ru": "апелляция к страху/предрассудку", "device": "Апелляция к страху"},
+    "Appeal_to_Pity": {"ru": "апелляция к жалости", "device": "Апелляция к жалости"},
+    "Flag_Waving": {"ru": "патриотическая апелляция", "device": "🐻/🦅 (восхваление без аргументов)"},
+    "Causal_Oversimplification": {"ru": "причинное упрощение", "device": "Post hoc / ложная причина"},
+    "Consequential_Oversimplification": {"ru": "следственное упрощение", "device": "Ложная импликация"},
+    "False_Dilemma-No_Choice": {"ru": "ложная дилемма", "device": "Ложная дилемма"},
+    "False_Equivalence": {"ru": "ложное равенство", "device": "Ложное равенство"},
+    "Straw_Man": {"ru": "соломенное чучело", "device": "S straw man"},
+    "Red_Herring": {"ru": "отвлечение", "device": "Red herring"},
+    "Whataboutism": {"ru": "whataboutism", "device": "Whataboutism"},
+    "Slogans": {"ru": "слоган", "device": "Слоган /Loaded language"},
+    "Appeal_to_Time": {"ru": "апелляция ко времени", "device": "Апелляция ко времени"},
+    "Conversation_Killer": {"ru": "вопрос-ловушка", "device": "Вопросы-ловушки"},
+    "Loaded_Language": {"ru": "нагруженная лексика", "device": "Эмоциональная лексика /Loaded language"},
+    "Repetition": {"ru": "повтор", "device": "Повтор с вариацией (illusory truth)"},
+    "Exaggeration-Minimisation": {"ru": "преувеличение/преуменьшение", "device": "Преувеличение/преуменьшение"},
+    "Obfuscation-Vagueness-Confusion": {"ru": "запутывание", "device": "Запутывание / размытость"},
+    "Name_Calling-Labeling": {"ru": "ярлык", "device": "Навешивание ярлыков"},
+    "Doubt": {"ru": "посеивание сомнения", "device": "Посеивание сомнения"},
+    "Guilt_by_Association": {"ru": "вина по ассоциации", "device": "Вина по ассоциации"},
+    "Appeal_to_Hypocrisy": {"ru": "апелляция к лицемерию", "device": "Tu quoque"},
+    "Questioning_the_Reputation": {"ru": "подрыв репутации", "device": "Ad hominem"}
+  }
+}

@@ -1,0 +1,7 @@
+name: psych-rag
+version: 1.0.0
+description: "Injects the psychology RAG block into multi-paragraph inbound messages before dispatch (pre_gateway_dispatch), so the analysis skill always gets retrieved passages even when a weak local model skips the MCP tool."
+author: Hermes Agent
+kind: standalone
+provides_hooks:
+  - pre_gateway_dispatch
