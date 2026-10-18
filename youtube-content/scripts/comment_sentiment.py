@@ -82,6 +82,72 @@ def classify(text):
     shouty = letters and sum(1 for c in letters if c.isupper()) / len(letters) > 0.4
     return best, shouty
 
+def build_threads(rows):
+    """Корневой комментарий + ВСЕ его потомки. Reply-on-reply остаётся в том же
+    треде — раньше каждый вложенный ответ открывал новый тред.
+
+    Корень ищется двумя путями: если id-цепочка разрешается внутри выборки — идём
+    по parent вверх; если id в выборке нет (flat-формат fetch_comments, где есть
+    только parent), корень берётся как префикс parent до первой точки — это и есть
+    id корневого комментария в схеме YouTube (<root>.<suffix>)."""
+    by_id = {row["id"]: row for row in rows}
+
+    def root_key(row):
+        cur, seen = row, set()
+        while cur:
+            p = cur.get("parent")
+            if not p or p == "root":
+                return cur["id"]
+            if p in by_id:
+                if cur["id"] in seen:
+                    break                      # защита от цикла в parent
+                seen.add(cur["id"])
+                cur = by_id[p]
+            else:
+                return p.split(".")[0]         # цепочка не разрешается — префикс
+        return row["id"]
+
+    threads = {}
+    for row in rows:
+        if not row.get("parent") or row["parent"] == "root":
+            continue
+        threads.setdefault(root_key(row), []).append(row)
+    for rid, members in threads.items():
+        if rid in by_id:
+            members.insert(0, by_id[rid])
+    return threads, by_id
+
+
+def thread_homogeneity(threads, by_id):
+    """Один тред = одна строка. overall — простое среднее по тредам (то, что
+    доставляется в чат), weighted — среднее, взвешенное по размеру тредов."""
+    thread_lines = []
+    hom_sum = hom_n = 0
+    for pid, members in threads.items():
+        if len(members) < 2:
+            continue
+        stance = [m for m in members if m["cat"] != "нейтрально"]
+        if len(stance) < 2:
+            thread_lines.append({"thread": (members[0].get("text") or "")[:60],
+                                 "author": members[0].get("author"), "size": len(members),
+                                 "dominant": None, "homogeneity": None})
+            continue
+        ccount = {}
+        for m in stance:
+            ccount[m["cat"]] = ccount.get(m["cat"], 0) + 1
+        dom = max(ccount, key=lambda k: ccount[k])
+        hom = round(100 * ccount[dom] / len(stance))
+        hom_sum += hom * len(stance); hom_n += len(stance)
+        p = by_id.get(pid) or members[0]
+        thread_lines.append({"thread": (p.get("text") or "")[:60],
+                             "author": p.get("author"), "size": len(members),
+                             "dominant": dom, "homogeneity": hom})
+    homs = [t["homogeneity"] for t in thread_lines if t["homogeneity"] is not None]
+    overall = round(sum(homs) / len(homs)) if homs else None
+    weighted = round(hom_sum / hom_n) if hom_n else None
+    return thread_lines, overall, weighted
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("url")
@@ -118,45 +184,15 @@ def main():
         counts[row["cat"]] = counts.get(row["cat"], 0) + 1
     mood = {k: round(100 * v / n) for k, v in counts.items()}
 
-    # threads: parent comment + its replies
-    by_id = {row["id"]: row for row in rows}
-    threads = {}
-    for row in rows:
-        if row["parent"] != "root":
-            threads.setdefault(row["parent"], []).append(row)
-    # include the parent comment itself in its thread
-    for pid, replies in threads.items():
-        if pid in by_id:
-            replies.insert(0, by_id[pid])
-
-    thread_lines = []
-    hom_sum = hom_n = 0
-    for pid, members in threads.items():
-        if len(members) < 2:
-            continue
-        stance = [m for m in members if m["cat"] != "нейтрально"]
-        if len(stance) < 2:
-            thread_lines.append({"thread": (members[0].get("text") or "")[:60],
-                                 "author": members[0].get("author"), "size": len(members),
-                                 "dominant": None, "homogeneity": None})
-            continue
-        ccount = {}
-        for m in stance:
-            ccount[m["cat"]] = ccount.get(m["cat"], 0) + 1
-        dom = max(ccount, key=ccount.get)
-        hom = round(100 * ccount[dom] / len(stance))
-        hom_sum += hom * len(stance); hom_n += len(stance)
-        p = by_id.get(pid) or members[0]
-        thread_lines.append({"thread": (p.get("text") or "")[:60],
-                             "author": p.get("author"), "size": len(members),
-                             "dominant": dom, "homogeneity": hom})
-
-    overall_hom = round(hom_sum / hom_n) if hom_n else None
+    # threads: корневой комментарий + ВСЕ его потомки (reply-on-reply в том же треде)
+    threads, by_id = build_threads(rows)
+    thread_lines, overall_hom, weighted_hom = thread_homogeneity(threads, by_id)
 
     if args.json:
         print(json.dumps({"title": info.get("title"), "url": info.get("webpage_url"),
                           "comments": n, "mood": mood,
                           "homogeneity_overall": overall_hom,
+                          "homogeneity_weighted": weighted_hom,
                           "threads": thread_lines}, ensure_ascii=False))
     else:
         print(f"=== Настроение комментариев ({n}) ===")
@@ -167,6 +203,8 @@ def main():
         print(f"эмоционально окрашенных (без нейтральных): {100 - mood.get('нейтрально', 0)}%, из них «кричащих» {shouty}")
         print(f"\n=== Однородность ===")
         print(f"в среднем по тредам: {overall_hom}%" if overall_hom is not None else "тредов с ответами нет")
+        if weighted_hom is not None and weighted_hom != overall_hom:
+            print(f"взвешенная по размеру тредов: {weighted_hom}%")
         if thread_lines:
             print("по тредам (≥2 комментариев):")
             for t in sorted(thread_lines, key=lambda x: -x["size"]):

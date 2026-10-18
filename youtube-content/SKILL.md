@@ -167,7 +167,8 @@ PYTHONPATH=~/.hermes/cache/scratch/yt-pylib python SKILL_DIR/scripts/comment_sen
 The script classifies each comment by a Russian emotion lexicon (злость / радость / недовольство / нейтрально) and computes per-thread homogeneity = share of stance-bearing comments in a thread matching the thread's dominant category (proxy for agreement inside the thread; threads with <2 stance-bearing comments are reported as «не измеряется»). Deliver in chat in this shape:
 
 - `Настроение комментариев (N): злость X%, радость Y%, недовольство Z%, нейтрально W%.` — percentages as the script reports them, never recomputed by hand.
-- `Однородность в треде: в среднем по тредам N%.` then one line per measurable thread: `@author «первые слова…» — однородность в треде X% (size, доминирует категория)`.
+- `Однородность в треде: в среднем по тредам N%.` then one line per measurable thread: `@author «первые слова…» — однородность в треде X% (size, доминирует категория)`. If the script also prints `взвешенная по размеру тредов: M%`, that is a DIFFERENT number (size-weighted mean) — quote it only as such, never as «среднее по тредам».
+- Thread definition (fixed 2026-10-18): a thread = the root comment + ALL its descendants; a reply-to-a-reply stays in the same thread. When comment ids are not available (flat format from `fetch_comments.py`, which stores only `parent`), the root is derived from the parent prefix before the first dot (`<root_id>.<suffix>` — YouTube comment-id scheme).
 - State once, briefly, that the classifier is lexicon-based: sarcasm/irony can be misclassified, and homogeneity measures emotional coloring, not literal semantic agreement.
 - If comments are disabled or fetch fails, say so plainly — never fabricate percentages.
 - The replay log record must include a `comments` field: `{mood, homogeneity_overall, threads}` matching the delivered numbers.
