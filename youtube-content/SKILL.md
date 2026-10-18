@@ -1,7 +1,7 @@
 ---
 name: youtube-content
-description: "YouTube transcripts to summaries, threads, blogs."
-version: 2.3.0
+description: "Transcripts to tagged analyses: manipulation, ads, comments."
+version: 2.4.0
 author: Teknium (teknium1), Hermes Agent
 license: MIT
 platforms: [linux, macos, windows]
