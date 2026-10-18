@@ -118,8 +118,10 @@ def main():
         ins = []
         for i, c in enumerate(items):
             lang, segs = detect_item(c["text"])
-            if lang in ("uk", "be", "mixed") and segs:
-                ins.append({"i": i, "author": c.get("author"), "lang": lang,
+            if lang in ("uk", "be", "mixed", "amb") and segs:
+                # 🐷 только за украинский; белорусский и спорный случай — без метки
+                tag = "🐷" if any(sl == "uk" for sl, _ in segs) else None
+                ins.append({"i": i, "author": c.get("author"), "lang": lang, "tag": tag,
                             "segments": segs, "text": c["text"][:200]})
         out["comments"] = {"n": len(items), "langs": dict(langs), "nonru_share": round(share, 3),
                            "insertions": ins}
@@ -133,9 +135,10 @@ def main():
         ins = []
         for idx, (line, t) in enumerate(zip(paras, paras)):
             lang, segs = detect_item(t)
-            if lang in ("uk", "be", "mixed") and segs:
+            if lang in ("uk", "be", "mixed", "amb") and segs:
                 ts = re.match(r"^(\d+:\d+(?::\d+)?)", line)
-                ins.append({"t": ts.group(1) if ts else None, "lang": lang,
+                tag = "🐷" if any(sl == "uk" for sl, _ in segs) else None
+                ins.append({"t": ts.group(1) if ts else None, "lang": lang, "tag": tag,
                             "segments": segs, "text": t[:200]})
         out["transcript"] = {"n": len(texts), "langs": dict(langs), "nonru_share": round(share, 3),
                              "insertions": ins}
