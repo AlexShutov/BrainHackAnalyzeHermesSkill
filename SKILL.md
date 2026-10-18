@@ -15,13 +15,13 @@ metadata:
 
 ## When to use
 
-The user sends, forwards or pastes text — a Telegram message, a forwarded channel post, a screenshot of a post, a chat fragment, an article, a document, a voice message — and asks for analysis (or the analysis is implied by the standing preference). Apply the same tag system as `youtube-content`; load that skill's marking table if the tags are not in context. AUTO-TRIGGER: any multi-paragraph text (more than one paragraph) sent for analysis runs this skill without being asked. Single-paragraph messages and one-line questions do not.
+The user sends, forwards or pastes text — a Telegram message, a forwarded channel post, a screenshot of a post, a chat fragment, an article, a document, a voice message — and asks for analysis (or the analysis is implied by the standing preference). Apply the same tag system as `youtube-content`; load that skill's marking table if the tags are not in context. AUTO-TRIGGER: any multi-paragraph text (more than one paragraph) sent for analysis runs this skill without being asked. Single-paragraph messages and one-line questions do not. Exception: for attached text files and long external posts the skill first asks for confirmation — see Input forms below.
 
 ## Input forms: files and long external posts
 
-- **Текстовый файл** (.txt, .md — скинут в бот): прочитать через read_file, дальше разбирать как обычный пост (тот же формат вывода, авто-триггер действует).
-- **Длинный пост из другой группы** (пересланный или вставленный, ≥2 абзацев): применяется автоматически, вопросов не задавать.
-- **Полный прогон трёх слоёв одним вызовом**: `../youtube-content/scripts/psych_layer.py --file <path>` (или stdin) — возвращает маркеры, классификацию по абзацам и retrieval одним JSON. Мерж результата: пропагандистские метки классификатора (Name Calling, Guilt by Association, Flag Waving, Appeal to Fear в массовом нарративе) → ⚫ 📢🧠; личные манипуляции/НЛП (loaded language, doubt, false dilemma, пресуппозиции, якорение) → ⚫ 🔪🧠; расхождение слоя со своей разметкой — показать оба вердикта; слой недоступен — тихая деградация к обычным проходам.
+- **Текстовый файл** (.txt, .md — скинут в бот) и **длинный пост из другой группы** (пересланный или вставленный, ≥2 абзацев): НЕ анализировать сразу. Сначала — вопрос-подтверждение через форму с кнопками: вопрос «Показать Большому Брату?» (для англоязычного чата — «Big Bro analyze?»; язык = язык общения чата), ровно две кнопки: «Показать» и «Отмена».
+- **«Показать»** → полный анализ: `../youtube-content/scripts/psych_layer.py --file <path>` (или stdin) — маркеры, классификация по абзацам и retrieval одним JSON — затем разметка по обычному формату. Мерж результата: пропагандистские метки классификатора (Name Calling, Guilt by Association, Flag Waving, Appeal to Fear в массовом нарративе) → ⚫ 📢🧠; личные манипуляции/НЛП (loaded language, doubt, false dilemma, пресуппозиции, якорение) → ⚫ 🔪🧠; расхождение слоя со своей разметкой — показать оба вердикта; слой недоступен — тихая деградация к обычным проходам.
+- **«Отмена»** → ничего не делать: анализ не запускать, файлов не читать, ответить коротким подтверждением без разбора. Повторный заход — только по новой присылке или явной команде.
 
 ## Output format
 
