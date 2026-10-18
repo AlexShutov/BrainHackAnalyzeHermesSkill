@@ -418,5 +418,85 @@
   "device": null,
   "family": null,
   "text": "Инструкция: нажать кнопку, подождать индикатор, затем вынуть карту и чек."
+ },
+ {
+  "id": "posweb1",
+  "device": "Ложная дилемма",
+  "family": "структура вывода",
+  "text": "«Либо ты за меня, либо ты — враг!»",
+  "source": "https://bulgarizdat.ru/publikaczii/manipulyaczii-v-obshhenii-kak-raspoznat-i-par",
+  "note": "sourced web example"
+ },
+ {
+  "id": "posweb2",
+  "device": "Вина по ассоциации",
+  "family": "эмоции и авторитет",
+  "text": "«Если Гитлер любил неоклассическое искусство — значит, любой классицизм есть нацизм»",
+  "source": "https://ru.wikipedia.org/wiki/Reductio_ad_Hitlerum",
+  "note": "sourced web example"
+ },
+ {
+  "id": "posweb3",
+  "device": "Red herring",
+  "family": "язык",
+  "text": "«the company is making great progress in product development that we hope will help our customers» (ответ на вопрос о новой экологической политике)",
+  "source": "https://effectiviology.com/red-herring/",
+  "note": "sourced web example"
+ },
+ {
+  "id": "posweb4",
+  "device": "Хорошо разрушенный результат",
+  "family": "приёмы внушения (книга)",
+  "text": "«Сложно ставить конкретную дату. Устройство на работу — это процесс, который требует времени. Более того, если уделять этому всё своё время, можно легко потерять подруг»",
+  "source": "https://koridze.ru/hrr-horosho-razrushennyi-rezultat/",
+  "note": "sourced web example"
+ },
+ {
+  "id": "posweb5",
+  "device": "Вопросы-ловушки",
+  "family": "приёмы внушения (книга)",
+  "text": "«Have you stopped beating your wife?»",
+  "source": "https://en.wikipedia.org/wiki/Loaded_question",
+  "note": "sourced web example"
+ },
+ {
+  "id": "posweb6",
+  "device": "Отложенный вывод",
+  "family": "сквозные (уровень текста)",
+  "text": "«Юпитер, ты сердишься — значит, ты не прав» (пропущенная посылка: «сердящийся не прав»)",
+  "source": "https://ru.wikipedia.org/wiki/%D0%AD%D0%BD%D1%82%D0%B8%D0%BC%D0%B5%D0%BC%D0%B0",
+  "note": "sourced web example"
+ },
+ {
+  "id": "posweb7",
+  "device": "Селекция на уровне текста",
+  "family": "сквозные (уровень текста)",
+  "text": "«We send the £350 million a week, let's fund our NHS instead» — реальная gross-цифра, регулятор показал, что база не учтена",
+  "source": "https://thefilter.club/propaganda-technique/cherry-picking/",
+  "note": "sourced web example"
+ },
+ {
+  "id": "posweb8",
+  "device": "Повтор с вариацией",
+  "family": "сквозные (уровень текста)",
+  "text": "утверждения о «украденных выборах» 2020 повторялись месяцами без новых доказательств",
+  "source": "https://propagandaarchive.org/learn/illusory-truth-effect/",
+  "note": "sourced web example"
+ },
+ {
+  "id": "posweb9",
+  "device": "Подводка (priming)",
+  "family": "сквозные (уровень текста)",
+  "text": "«Вы только что смотрели кулинарное шоу — и вдруг слово „б…а“ дополняете до „булка“»",
+  "source": "https://delo-v-lidah.ru/blog/effekt-prajminga-chto-eto-takoe-vidy-v-reklame",
+  "note": "sourced web example"
+ },
+ {
+  "id": "posweb10",
+  "device": "Нарративная дуга",
+  "family": "сквозные (уровень текста)",
+  "text": "Apple «1984»:Minute-long ad told the story of how Macintosh would free consumers from tyranny",
+  "source": "https://www.ama.org/marketing-news/the-art-of-the-narrative-arc-why-marketers-mu",
+  "note": "sourced web example"
  }
 ]
