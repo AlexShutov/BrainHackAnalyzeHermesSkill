@@ -14,13 +14,25 @@ Usage:
   echo "$TRANSCRIPT" | python3 psych_layer.py
   python3 psych_layer.py --file transcript.txt
 """
-import argparse, json, os, subprocess, sys
+import argparse, json, os, re, subprocess, sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 SKILL_ROOT = os.path.abspath(os.path.join(HERE, "..", ".."))
 HERMES = os.environ.get("HERMES_HOME") or os.path.expanduser("~/.hermes")
 PY = os.environ.get("PSYCH_RAG_PY", os.path.join(HERMES, "tools", "psych-rag-env", "bin", "python"))
 SCRIPTS = os.path.join(SKILL_ROOT, "scripts")
+
+
+def paragraphs(text):
+    """Та же единица абзаца, что у markers/classifier/plugin: строка до перевода строки.
+    Раньше этот файл делил по пустной строке, и индексы абзацев не совпадали с
+    классификатором (он делит по одиночному переводу строки)."""
+    try:
+        sys.path.insert(0, SCRIPTS)
+        import markers
+        return markers.paragraphs(text)
+    except Exception:
+        return [p for p in re.split(r"\n+", text) if p.strip()]
 
 
 def call(script, args, timeout):
@@ -106,6 +118,8 @@ def attach_subtypes(classification, markers):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--file", help="transcript file (default: stdin)")
+    ap.add_argument("--no-gate", action="store_true",
+                    help="не гейтить классификатор слоем маркеров (для сверки цифр)")
     a = ap.parse_args()
     text = open(a.file, encoding="utf-8").read() if a.file else sys.stdin.read()
     text = (text or "").strip()
@@ -120,10 +134,15 @@ def main():
         return
 
     markers = call("markers.py", [text, "--json"], 30)
-    classifier = call("classifier.py", [text, "--json"], 120)
+    hits = (markers or {}).get("markers", [])
+    # гейт по правилу навыка: классификатор запускается только на абзацах, где
+    # сработали маркеры. Раньше этот файл не гейтился — цифры расходились с плагином.
+    gated = bool(hits) and not a.no_gate
+    classifier = call("classifier.py", [text, "--json"] + (["--gated"] if gated else []), 120)
     rag = call("rag_query.py", [text[:1500], "--top", "6"], 60)
 
-    result: dict = {"status": "ok", "source": "transcript"}
+    result: dict = {"status": "ok", "source": "transcript",
+                    "paragraphs": len(paragraphs(text)), "gated": gated}
     if markers:
         result["markers_hits"] = markers.get("hits", 0)
         result["markers"] = markers.get("markers", [])

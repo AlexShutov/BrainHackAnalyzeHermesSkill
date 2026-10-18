@@ -52,6 +52,13 @@ def window(text, m, pad=30):
     a = max(0, m.start() - pad); b = min(len(text), m.end() + pad)
     return text[a:b].strip()
 
+def paragraphs(text):
+    """Каноническая единица абзаца для всех слоёв (markers, classifier, psych_layer, plugin):
+    строка до перевода строки, пустые строки пропускаются. Транскрипты и сообщения
+    приходят по одному абзацу на строку; раньше psych_layer делит по пустной строке,
+    и индексы абзацев не совпадали с классификатором."""
+    return [p for p in re.split(r"\n+", text) if p.strip()]
+
 def scan(text):
     hits = []
     for fam, group in MARKERS["families"].items():
@@ -63,7 +70,7 @@ def scan(text):
                     hits.append({"family": fam, "marker": label, "found": w,
                                  "context": window(text, m), "candidates": MAP.get(fam, [])})
     # повтор тезиса: совпадение значимых слов между абзацами
-    paras = [p for p in re.split(r"\n+", text) if p.strip()]
+    paras = paragraphs(text)
     if len(paras) > 1:
         stop = set("и в не на что как это то он она они мы вы я к с у о для по из но а также же ну да уж вот".split())
         sets = [set(re.findall(r"[а-яё]{4,}", p.lower())) - stop for p in paras]

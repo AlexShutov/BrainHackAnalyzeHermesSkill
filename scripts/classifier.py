@@ -18,6 +18,8 @@ from tokenizers import Tokenizer
 import onnxruntime as ort
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, HERE)
+import markers  # каноническое определение абзаца для всех слоёв
 MODELS = os.path.join(os.path.dirname(HERE), "psychology", "models")
 ONNX = os.path.join(MODELS, "classifier_int8.onnx")
 TOKENIZER = os.path.join(MODELS, "tokenizer.json")
@@ -83,10 +85,9 @@ def main():
     t0 = time.time()
     session()
     load_ms = round((time.time() - t0) * 1000)
-    paras = [p for p in text.split("\n") if p.strip()]
+    paras = markers.paragraphs(text)
     gated = "--gated" in sys.argv
     if gated:
-        import markers
         hits = markers.scan(text)
         # map marker hits to paragraph index by locating the found word
         keep = set()
@@ -102,7 +103,9 @@ def main():
     for i, p in paras:
         hits = classify(p, min_conf)
         if hits:
-            rows.append({"para": i, "text": p[:80], "labels": hits})
+            # полная строка абзаца: JSON-потребитель (psych_layer) сопоставляет маркеры
+            # по тексту абзаца, и маркер после 80-го символа иначе терялся
+            rows.append({"para": i, "text": p, "labels": hits})
     call_ms = round((time.time() - t1) * 1000)
     if "--json" in sys.argv:
         upd = None
