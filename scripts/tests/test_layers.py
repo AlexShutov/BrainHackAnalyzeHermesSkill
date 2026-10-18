@@ -226,7 +226,74 @@ class TestOpenBugs(unittest.TestCase):
         src = read(os.path.join(YT, "neural_pass.py"))
         self.assertIn("REPOS[name]", src)
         self.assertTrue(set(neural_pass.MULTILABEL) >= set(neural_pass.REPOS))
-        self.assertIn("None not in labels", src, "нет защиты от None-метки в id2label")
+        self.assertIn("None not in labels", src, "нет защиты от None-метки в neural_pass")
+
+    # --- новое, найденное этим проходом ---
+    def test_runtime_classifier_operating_point(self):
+        """Правило: ⚫ только при p ≥ порога метки И p ≥ 0.70. В рантайме — только порог."""
+        plugin = read(PLUGIN)
+        ysrc = read(os.path.join(YT, "psych_layer.py"))
+        self.assertIn("--min", plugin, "плагин зовёт classifier без --min 0.70")
+        self.assertIn("--min", ysrc, "psych_layer зовёт classifier без --min 0.70")
+        self.assertTrue(all(t >= 0.70 for t in classifier.THRESH),
+                        "14 из 23 порогов ниже 0.70 — выдаваемые метки ниже правила")
+
+    def test_thread_definition_is_one_across_paths(self):
+        if tele is None:
+            self.skipTest("telethon не установлен")
+        rows = [{"id": "R1", "parent": "root", "text": "злость"},
+                {"id": "R1.b1", "parent": "R1", "text": "радость"},
+                {"id": "R1.b1.c1", "parent": "R1.b1", "text": "радость"}]
+        for r in rows:
+            r["cat"] = comment_sentiment.classify(r["text"])[0]
+        th, by = comment_sentiment.build_threads(rows)
+        lex_hom = comment_sentiment.thread_homogeneity(th, by)[1]
+        comments = [{"id": r["id"], "reply_to": None if r["parent"] == "root" else r["parent"],
+                     "text": r["text"]} for r in rows]
+        block = tele.sentiment_block(comments)
+        self.assertEqual(block["homogeneity_overall"], lex_hom,
+                         f"telegram-путь даёт {block['homogeneity_overall']}% против {lex_hom}% "
+                         "— вложенный ответ открывает отдельный тред")
+
+    def test_overall_homogeneity_is_one_definition(self):
+        src = read(os.path.join(YT, "rutube_comments.py"))
+        self.assertNotIn("hom_sum / hom_n", src,
+                         "rutube выдаёт как «в среднем по тредам» взвешенное среднее, "
+                         "а навык определяет это как простое среднее по тредам")
+
+    def test_lexicon_has_no_duplicate_stems(self):
+        from collections import Counter
+        for cat, stems in comment_sentiment.CATS.items():
+            dups = [s for s, n in Counter(stems).items() if n > 1]
+            self.assertFalse(dups, f"{cat}: дубликат {dups} — одно и то же слово считается дважды")
+
+    def test_stop_list_is_effective_for_repetition(self):
+        """Стоп-лист работает только если слово может быть выдано regex [а-яё]{4,}."""
+        stop = set("и в не на что как это то он она они мы вы я к с у о для по из но а также же ну да уж вот".split())
+        unreachable = [w for w in stop if len(w) < 4]
+        self.assertFalse(unreachable,
+                         f"{len(unreachable)} из {len(stop)} стоп-слов недостижимы при {{4,}} — "
+                         "служебные слова типа «очень», «просто» считаются значимыми")
+
+    def test_ambig_and_weak_are_used_in_the_decision(self):
+        """docstring: неоднозначные считаются вместе с маркером; омонимы усиливают решённый язык."""
+        body = re.search(r"def lang_of.*?(?=\ndef )", read(os.path.join(YT, "ukr_detect.py")), re.S).group()
+        self.assertIn("AMBIG", body, "AMBIG определён, но в решении не участвует: «це ми бачили де так» → ru")
+        self.assertIn("weak_be", body.split("return")[1:], "WEAK собирается, но никогда не влияет на вердикт")
+
+    def test_hf_language_filter_accepts_prefixed_tags(self):
+        src = read(os.path.join(SCRIPTS, "model_update_check.py"))
+        self.assertIn("language:", src, "фильтр языка ловит только 2-буквенные теги, `language:ru` пропускает")
+
+    def test_fetch_transcript_outputs_promised_language_key(self):
+        src = read(os.path.join(YT, "fetch_transcript.py"))
+        self.assertIn('"language"', src.split("def main")[1],
+                      "docstring обещает поле language в выводе, main его не печатает")
+
+    def test_rag_mcp_chunks_long_query(self):
+        src = read(os.path.join(SCRIPTS, "rag_mcp.py"))
+        self.assertIn("chunk", src, "MCP-путь (основной по правилу навыка) не делит длинный запрос: "
+                                    "embedding видит только первые ~512 токена")
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
