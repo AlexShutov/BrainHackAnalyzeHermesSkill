@@ -93,6 +93,18 @@ log record are identical — only the plumbing differs:
   does not work for Rutube.
 - Auto-subtitles garble names and brands (same caveat as YouTube auto-subs).
 
+## Telegram post comments (user session, lazy login)
+
+Trigger: the user forwards a post and asks about its comments (explicitly, or right after pressing «Показать»). The Bot API cannot read discussion threads — comments are fetched through the user's OWN Telethon session, stored LOCALLY on the machine where this bot runs; each colleague's session lives in their own instance, sessions are never shared.
+
+- Extract the origin from the forward: chat (username or `-100…` id) + post id; a `t.me/<channel>/<id>` or `t.me/c/<id>/<id>` link works directly via `--link`.
+- Run: `psych-rag-env/bin/python scripts/telegram_comments.py comments --link <url> --sentiment` (telethon is installed in the psych-rag venv). Returns all comments (author, text, date, replies, reactions) plus the sentiment block — mood % and per-thread homogeneity computed by the SAME lexicon as `comment_sentiment.py`; deliver it in the same shape as the YouTube comments block.
+- **If it returns `login_required` — lazy login dialogue, run BEFORE anything else and ALWAYS with an explicit explanation.** Say why: Telegram Bot API cannot read comments, so we read the discussion thread through the user's own account; the session file stays on this machine only, the login code arrives on the user's phone, and each bot instance (each colleague) logs into their own account on their own machine. NEVER log in during skill installation — only here, on first need. Then walk the steps:
+  1. one-time `api_id`/`api_hash` from my.telegram.org (free);
+  2. phone number;
+  3. the code Telegram sends (and cloud password if set) — run `login` again with `--code` (`--password`).
+- Honest caveats: auto-generated names are as-is; deleted/hidden comments reduce the fetched count vs the declared one — report the fetched count; lexicon sentiment misclassifies sarcasm.
+
 ## Comments (no API key needed)
 
 Comments are fetchable WITHOUT a YouTube Data API key via the innertube endpoint through yt-dlp. The official Data API (`commentThreads`) requires an API key — not configured here; do not guess one. Install yt-dlp into the same isolated target dir as the transcript lib:
