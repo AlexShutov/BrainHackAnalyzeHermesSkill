@@ -67,8 +67,7 @@ def jsonl_chunks(path):
 def raw_books():
     """Book sources to ingest: raw files in psychology/ + encrypted corpus/reference_N.enc."""
     out = []
-    # .fb2 is parsed directly by fb2_chunks below — do not double-ingest
-    for ext in (".pdf", ".epub", ".doc", ".txt"):
+    for ext in (".fb2", ".pdf", ".epub", ".doc", ".txt"):
         out += sorted(glob.glob(os.path.join(R.PSY, "*" + ext)))
     out = [p for p in out if not p.endswith(".ingest.txt")]
     try:
@@ -112,10 +111,10 @@ def ensure_jsonl():
 
 def book_chunks():
     ensure_jsonl()
-    # re-glob AFTER ensure_jsonl: fresh clones have no jsonl at import time
+    # re-glob AFTER ensure_jsonl: fresh clones have no jsonl at import time.
+    # Single ingestion path: every book (raw or encrypted) goes through
+    # book_ingest.py -> books/*.jsonl; no direct fb2 parsing here any more.
     chunks = []
-    for p in FB2:
-        chunks += fb2_chunks(p)
     for p in sorted(glob.glob(os.path.join(R.PSY, "books", "*.jsonl"))):
         chunks += jsonl_chunks(p)
     return chunks
