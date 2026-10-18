@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
-"""Psychology layer of the video pipeline: run bigbro-analyze on the transcript.
+"""Psychology layer: run bigbro-analyze on a text — video transcript or user-shared content.
 
 Calls the three layers of the sibling bigbro-analyze skill (lexical markers →
-RAG retrieval → ONNX classifier) on the raw transcript and returns one combined
-JSON. Transcript-only: this is how bigbro-analyze participates in video
-analysis — never applied to the chat message itself.
+RAG retrieval → ONNX classifier) on the given text and returns one combined
+JSON. Used by the video pipeline on transcripts and by bigbro-analyze itself
+for user-shared files and long external posts. Never auto-applied to casual
+chat messages.
 
 Exit 0 always; on any problem returns {"status": "unavailable", "reason": ...}
 so the video pipeline degrades to the plain ⚫ passes without breaking.
