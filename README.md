@@ -1,7 +1,9 @@
 # Psychology analysis skill (installable on a clean Hermes)
 
 Marks manipulation devices in text/messages with the standing tag system, using three
-layers that do not depend on the text containing the name of a device.
+layers that do not depend on the text containing the name of a device. The corpus covers
+applied-psychology territory: manipulation and influence tactics, cognitive biases,
+propaganda techniques and logical fallacies, in both Russian and English text.
 
 1. **Marker layer** — `scripts/markers.py` + `psychology/markers.json`: deterministic, no LLM,
    ~1 ms. Finds what is physically visible in the text (presupposition triggers per Levinson,
