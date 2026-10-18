@@ -47,11 +47,11 @@ def tokenizer():
 def classify(text, min_conf=None):
     tok = tokenizer()
     enc = tok.encode(text, add_special_tokens=True)
-    if len(enc.ids) > MAX_TOKENS:
-        enc.ids = enc.ids[:MAX_TOKENS]
-        enc.type_ids = enc.type_ids[:MAX_TOKENS]
-    ids = np.array([enc.ids], dtype=np.int64)
-    mask = np.array([enc.attention_mask], dtype=np.int64)
+    # tokenizers.Encoding is immutable — truncate into locals (Encoding.ids is not writable)
+    ids_l = enc.ids[:MAX_TOKENS]
+    mask_l = enc.attention_mask[:MAX_TOKENS]
+    ids = np.array([ids_l], dtype=np.int64)
+    mask = np.array([mask_l], dtype=np.int64)
     logits = session().run(None, {"input_ids": ids, "attention_mask": mask})[0][0]
     p = 1 / (1 + np.exp(-logits))
     thr = THRESH if min_conf is None else np.maximum(THRESH, min_conf)
