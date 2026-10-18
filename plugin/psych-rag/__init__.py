@@ -50,7 +50,7 @@ def retrieve(text):
     try:
         # таймаут был рассчитан на срез 1500; на полном тексте embedding занимает
         # ~6 с (замер: 3.2 с на 1500, 6.2 с на 4000), поэтому запас увеличен
-        out = subprocess.run([RAG_PY, QUERY, text], capture_output=True, text=True,
+        out = subprocess.run([RAG_PY, QUERY, text, "--chunk", "1500"], capture_output=True, text=True,
                              timeout=TIMEOUT * 2)
         if out.returncode != 0:
             return None

@@ -16,23 +16,41 @@ def main():
     ap.add_argument("--top-k", type=int, default=R.TOP_K)
     ap.add_argument("--min-score", type=float, default=R.MIN_SCORE)
     ap.add_argument("--no-embed", action="store_true")
+    ap.add_argument("--chunk", type=int, default=0,
+                    help="делить длинный запрос на куски по N символов и опрашивать каждый "
+                         "кусок отдельно (0 = один запрос). Без этого длинный текст попадает "
+                         "в индекс только по первым ~512 токенам embedding-модели, и устройства "
+                         "из хвоста текста не находятся никогда.")
     a = ap.parse_args()
 
-    qvec = None
+    chunks = [a.query[i:i + a.chunk] for i in range(0, len(a.query), a.chunk)] if a.chunk else [a.query]
+
+    qvecs = None
     t0 = time.time()
     if not a.no_embed:
         try:
             from fastembed import TextEmbedding
             m = TextEmbedding(model_name=R.MODEL)
-            qvec = list(m.embed([a.query]))[0]
+            # модель загружается один раз, вектора — по всем кускам сразу
+            qvecs = [list(m.embed([c]))[0] for c in chunks]
         except Exception as e:
             print(f"# embed unavailable ({e.__class__.__name__}), BM25-only", file=sys.stderr)
     embed_ms = (time.time() - t0) * 1000
 
     t1 = time.time()
-    res = R.search(a.query, top_k=a.top_k, min_score=a.min_score, qvec=qvec)
-    print(json.dumps({"query": a.query[:120], "embed_ms": round(embed_ms, 1),
-                      "total_ms": round((time.time() - t1) * 1000, 1), "results": res},
+    merged = {}
+    for i, c in enumerate(chunks):
+        res = R.search(c, top_k=a.top_k, min_score=a.min_score,
+                       qvec=(qvecs[i] if qvecs else None))
+        for r in res:
+            key = (r["kind"], r["label"])
+            if key not in merged or r["score"] > merged[key]["score"]:
+                merged[key] = dict(r)
+                merged[key]["chunk"] = i + 1
+    out = sorted(merged.values(), key=lambda r: -r["score"])[:a.top_k]
+    print(json.dumps({"query": a.query[:120], "chunks": len(chunks),
+                      "embed_ms": round(embed_ms, 1),
+                      "total_ms": round((time.time() - t1) * 1000, 1), "results": out},
                      ensure_ascii=False, indent=1))
 
 if __name__ == "__main__":

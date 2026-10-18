@@ -60,16 +60,37 @@ def paragraphs(text):
     и индексы абзацев не совпадали с классификатором."""
     return [p for p in re.split(r"\n+", text) if p.strip()]
 
+def paragraph_spans(text):
+    """Те же абзацы, но с позициями — чтобы hit нес свой абзац, а не искался по подстроке.
+
+    Раньше гейт и подтип находили абзац по `found in p`: это ломалось на repetition,
+    где found — склеенная строка слов («видит, качество, цену»), которой нет ни в одном
+    абзаце, и абзац, помеченный только повтором, до классификатора не доходил."""
+    return [(m.start(), m.end()) for m in re.finditer(r"[^\n]+", text) if m.group().strip()]
+
+def para_of(spans, pos):
+    for i, (a, b) in enumerate(spans, 1):
+        if a <= pos < b:
+            return i
+    return None
+
 def scan(text):
     hits = []
+    spans = paragraph_spans(text)
     for fam, group in MARKERS["families"].items():
         for label, words in group.items():
             if not isinstance(words, list):
                 continue
             for w in words:
-                for m in re.finditer(r"(?<!\w)" + re.escape(w.lower()) + r"(?=\W|$)", text.lower()):
+                # регистр снимается флагом, а не lower() строки: позиции совпадают с
+                # исходным текстом (у части символов lower() меняет длину — «İ» → «i̇»,
+                # и window() съезжал на столько, на сколько выросла строка)
+                pat = r"(?<!\w)" + re.escape(w.lower()) + r"(?=\W|$)"
+                for m in re.finditer(pat, text, re.IGNORECASE):
                     hits.append({"family": fam, "marker": label, "found": w,
-                                 "context": window(text, m), "candidates": MAP.get(fam, [])})
+                                 "context": window(text, m),
+                                 "para": para_of(spans, m.start()),
+                                 "candidates": MAP.get(fam, [])})
     # повтор тезиса: совпадение значимых слов между абзацами
     paras = paragraphs(text)
     if len(paras) > 1:
@@ -90,6 +111,10 @@ def scan(text):
                     hits.append({"family": "структурные маркеры", "marker": "repetition",
                                  "found": ", ".join(sorted(shared)),
                                  "context": f"абзац {i+1} ↔ абзац {j+1}",
+                                 # абзацы hit-а — сами индексы, а не склеенная строка слов:
+                                 # по строке абзац не находится никогда, и абзац с одним лишь
+                                 # повтором не доходил ни до классификатора, ни до подтипа
+                                 "para": [i + 1, j + 1],
                                  "candidates": MAP["структурные маркеры"]})
                 shared_side = side_sets[i] & side_sets[j]
                 # Боковой hit добавляется только там, где основной его не покрыл: иначе
@@ -98,6 +123,7 @@ def scan(text):
                     hits.append({"family": "структурные маркеры", "marker": "repetition",
                                  "found": ", ".join(sorted(shared_side)),
                                  "context": f"абзац {i+1} ↔ абзац {j+1} (боковой канал: мова приведена к русской форме)",
+                                 "para": [i + 1, j + 1],
                                  "candidates": MAP["структурные маркеры"], "via_side": True})
     return hits
 

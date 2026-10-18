@@ -47,23 +47,37 @@ def tokenizer():
     return _tok
 
 def classify(text, min_conf=None):
+    """Классификация абзаца. Абзац длиннее MAX_TOKENS режется на куски, а не отбрасывается.
+
+    Раньше `enc.ids[:MAX_TOKENS]` молча резал: приём после 256 токенов был невидим
+    (замер: абзац 2550 токенов с подменой в конце -> пустой результат, тот же приём
+    отдельным абзацем -> Doubt 0.704). Теперь каждый кусок проходит отдельно, и по
+    каждому метке берётся максимальная вероятность между кусками — порог thresholds.npy
+    применяется к этому максимуму.
+    """
     tok = tokenizer()
     enc = tok.encode(text, add_special_tokens=True)
-    # tokenizers.Encoding is immutable — truncate into locals (Encoding.ids is not writable)
-    ids_l = enc.ids[:MAX_TOKENS]
-    mask_l = enc.attention_mask[:MAX_TOKENS]
-    ids = np.array([ids_l], dtype=np.int64)
-    mask = np.array([mask_l], dtype=np.int64)
-    logits = session().run(None, {"input_ids": ids, "attention_mask": mask})[0][0]
-    p = 1 / (1 + np.exp(-logits))
+    ids_all, mask_all = enc.ids, enc.attention_mask
+    chunks = [ids_all[:MAX_TOKENS]] if len(ids_all) <= MAX_TOKENS else \
+             [ids_all[i:i + MAX_TOKENS] for i in range(0, len(ids_all), MAX_TOKENS)]
+    agg = {}
+    for ci, chunk in enumerate(chunks, 1):
+        # attention_mask берётся по фактической длине куска (у хвостового куска она короче)
+        m = mask_all[:len(chunk)] if len(chunk) == MAX_TOKENS else [1] * len(chunk)
+        logits = session().run(None, {"input_ids": np.array([chunk], dtype=np.int64),
+                                      "attention_mask": np.array([m], dtype=np.int64)})[0][0]
+        p = 1 / (1 + np.exp(-logits))
+        for i, v in enumerate(p):
+            if LABELS[i] == "Other":
+                continue
+            if v > agg.get(i, (0.0, 0))[0]:
+                agg[i] = (float(v), ci)
     thr = THRESH if min_conf is None else np.maximum(THRESH, min_conf)
-    out = []
-    for i, v in enumerate(p):
-        if v >= thr[i] and LABELS[i] != "Other":
-            out.append({"label": LABELS[i], "p": round(float(v), 3),
-                        "threshold": round(float(thr[i]), 3),
-                        "ru": TAXONOMY.get(LABELS[i], {}).get("ru", LABELS[i]),
-                        "device": TAXONOMY.get(LABELS[i], {}).get("device", "")})
+    out = [{"label": LABELS[i], "p": round(v, 3), "threshold": round(float(thr[i]), 3),
+            "chunk": c,
+            "ru": TAXONOMY.get(LABELS[i], {}).get("ru", LABELS[i]),
+            "device": TAXONOMY.get(LABELS[i], {}).get("device", "")}
+           for i, (v, c) in agg.items() if v >= thr[i]]
     out.sort(key=lambda x: -x["p"])
     return out
 
@@ -89,13 +103,21 @@ def main():
     gated = "--gated" in sys.argv
     if gated:
         hits = markers.scan(text)
-        # map marker hits to paragraph index by locating the found word
+        # абзац берётся из индекса hit-а, а не из подстроки: у repetition found —
+        # склеенная строка слов, которой нет ни в одном абзаце, и абзац, помеченный
+        # только повтором, раньше до модели не доходил
         keep = set()
         for h in hits:
-            for i, p in enumerate(paras, 1):
-                if h["found"].lower() in p.lower():
-                    keep.add(i)
-        paras = [(i, p) for i, p in enumerate(paras, 1) if i in keep]
+            pi = h.get("para")
+            if isinstance(pi, list):
+                keep.update(pi)
+            elif pi:
+                keep.add(pi)
+            else:
+                for i, pp in enumerate(paras, 1):
+                    if h["found"].lower() in pp.lower():
+                        keep.add(i)
+        paras = [(i, pp) for i, pp in enumerate(paras, 1) if i in keep]
     else:
         paras = list(enumerate(paras, 1))
     rows = []

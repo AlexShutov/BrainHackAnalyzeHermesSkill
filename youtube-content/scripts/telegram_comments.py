@@ -146,7 +146,11 @@ def cmd_comments(a):
     with client() as c:
         entity = c.get_entity(peer_for(chat))
         comments, n = [], 0
-        for m in c.iter_messages(entity, reply_to=post, limit=a.limit):
+        # limit=0 в Telethon означает «ноль сообщений», а не «все»: iter_messages при
+        # limit <= 0 сразу StopAsyncIteration (client/messages.py), и путь по умолчанию
+        # возвращал пустой список, хотя help обещал «0 = все». «Все» — это None.
+        lim = None if a.limit == 0 else a.limit
+        for m in c.iter_messages(entity, reply_to=post, limit=lim):
             n += 1
             reactions = 0
             if m.reactions:

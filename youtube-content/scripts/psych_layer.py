@@ -82,10 +82,25 @@ NLP_FAMILY_MARKS = (  # marker-layer families = НЛП-инструментар�
 )
 
 
-def marker_families_in(para_text, markers):
-    """Marker families whose found-word occurs in this paragraph's text."""
+def marker_families_in(para_index, para_text, markers):
+    """Marker families whose hit belongs to this paragraph.
+
+    Абзац берётся из индекса hit-а (`para`), а не из подстроки: у repetition found —
+    склеенная строка слов («видит, качество, цену»), которой нет ни в одном абзаце,
+    и подтип по повтору абзацу не присваивался. Подстрока остаётся только fallback-ом
+    для hit-ов без индекса."""
     t = (para_text or "").lower()
-    return {h.get("family", "") for h in markers if h.get("found", "").lower() in t}
+    fams = set()
+    for h in markers:
+        p = h.get("para")
+        if isinstance(p, list):
+            if para_index in p:
+                fams.add(h.get("family", ""))
+        elif p == para_index:
+            fams.add(h.get("family", ""))
+        elif not p and h.get("found", "").lower() in t:
+            fams.add(h.get("family", ""))
+    return fams
 
 
 def attach_subtypes(classification, markers):
@@ -97,7 +112,7 @@ def attach_subtypes(classification, markers):
     order = ["📢🧠", "🎭🧠", "🔪🧠"]
     for para in classification:
         labels = {l.get("label") for l in para.get("labels", [])}
-        fams = marker_families_in(para.get("text", ""), markers)
+        fams = marker_families_in(para.get("para"), para.get("text", ""), markers)
         present = []
         for s in order:
             if s == "📢🧠" and any(
@@ -139,7 +154,12 @@ def main():
     # сработали маркеры. Раньше этот файл не гейтился — цифры расходились с плагином.
     gated = bool(hits) and not a.no_gate
     classifier = call("classifier.py", [text, "--json"] + (["--gated"] if gated else []), 120)
-    rag = call("rag_query.py", [text[:1500], "--top", "6"], 60)
+    # полный текст, кусками по 1500 символов: раньше этот файл опрашивал индекс только
+    # по первым 1500, хотя плагин — по всему тексту до 4000. Замер на одном тексте:
+    # полный запрос даёт «Ложная дилемма» (приём на позиции 3739), срез 1500 — нет.
+    # Embedding-модель сама видит только ~512 токена, поэтому куски — единственный
+    # способ достать устройства из хвоста длинного транскрипта.
+    rag = call("rag_query.py", [text, "--top-k", "6", "--chunk", "1500"], 120)
 
     result: dict = {"status": "ok", "source": "transcript",
                     "paragraphs": len(paragraphs(text)), "gated": gated}
