@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""Psychology layer: run bigbro-analyze on a text — video transcript or user-shared content.
+"""Psychology layer: run brain-hack-analyze on a text — video transcript or user-shared content.
 
-Calls the three layers of the sibling bigbro-analyze skill (lexical markers →
+Calls the three layers of the sibling brain-hack-analyze skill (lexical markers →
 RAG retrieval → ONNX classifier) on the given text and returns one combined
-JSON. Used by the video pipeline on transcripts and by bigbro-analyze itself
+JSON. Used by the video pipeline on transcripts and by brain-hack-analyze itself
 for user-shared files and long external posts. Never auto-applied to casual
 chat messages.
 
@@ -17,10 +17,10 @@ Usage:
 import argparse, json, os, subprocess, sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-BIGBRO = os.path.abspath(os.path.join(HERE, "..", ".."))
+SKILL_ROOT = os.path.abspath(os.path.join(HERE, "..", ".."))
 HERMES = os.environ.get("HERMES_HOME") or os.path.expanduser("~/.hermes")
 PY = os.environ.get("PSYCH_RAG_PY", os.path.join(HERMES, "tools", "psych-rag-env", "bin", "python"))
-SCRIPTS = os.path.join(BIGBRO, "scripts")
+SCRIPTS = os.path.join(SKILL_ROOT, "scripts")
 
 
 def call(script, args, timeout):
@@ -115,7 +115,7 @@ def main():
 
     if not (os.path.isfile(PY) and os.path.isfile(os.path.join(SCRIPTS, "markers.py"))):
         print(json.dumps({"status": "unavailable",
-                          "reason": f"bigbro scripts or venv not found ({SCRIPTS})"},
+                          "reason": f"brain-hack scripts or venv not found ({SCRIPTS})"},
                          ensure_ascii=False))
         return
 
@@ -135,7 +135,7 @@ def main():
                           "snippet": r["snippet"]} for r in rag["results"]]
     if "classification" not in result and "markers" not in result:
         result["status"] = "unavailable"
-        result["reason"] = "слои bigbro не ответили"
+        result["reason"] = "слои brain-hack не ответили"
     print(json.dumps(result, ensure_ascii=False))
 
 

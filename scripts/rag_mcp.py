@@ -7,7 +7,7 @@ call is ~5-20 ms. Hermes config:
   mcp_servers:
     psychology-rag:
       command: /Users/alex/.hermes/tools/psych-rag-env/bin/python
-      args: ["/Users/alex/.hermes/skills/bigbro-analyze/scripts/rag_mcp.py"]
+      args: ["/Users/alex/.hermes/skills/brain-hack-analyze/scripts/rag_mcp.py"]
       enabled: true
 
 BM25-only fallback if ONNX cannot load — the tool still answers, lexical only.

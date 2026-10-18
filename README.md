@@ -96,8 +96,8 @@ The classifier never overrides the closed list or the markers: on disagreement b
 ## Install on a clean Hermes
 
 ```bash
-git clone https://github.com/AlexShutov/BigBroAnalyzeHermesSkill ~/.hermes/skills/bigbro-analyze
-bash ~/.hermes/skills/bigbro-analyze/scripts/setup.sh
+git clone https://github.com/AlexShutov/BrainHackAnalyzeHermesSkill ~/.hermes/skills/brain-hack-analyze
+bash ~/.hermes/skills/brain-hack-analyze/scripts/setup.sh
 ```
 
 Requirements: CPython 3.11–3.14 (onnxruntime has no wheels for newer versions; setup.sh picks a

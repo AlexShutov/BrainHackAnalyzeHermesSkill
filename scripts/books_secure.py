@@ -16,7 +16,7 @@ import base64, hashlib, json, os, tempfile, unicodedata
 
 from cryptography.fernet import Fernet
 
-ENCRYPT_KEY = "bigbro-corpus-v1::7books::do-not-drop"
+ENCRYPT_KEY = "brainhack-corpus-v1::7books::do-not-drop"
 _CORPUS = os.path.join(os.path.dirname(os.path.abspath(__file__)), os.pardir, "psychology", "corpus")
 LOCAL_MANIFEST = os.path.join(_CORPUS, "manifest.local.json")
 _RAW_EXTS = (".pdf", ".epub", ".doc", ".txt")
