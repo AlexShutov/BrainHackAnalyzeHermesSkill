@@ -21,6 +21,7 @@ SKILL_ROOT = os.path.abspath(os.path.join(HERE, "..", ".."))
 HERMES = os.environ.get("HERMES_HOME") or os.path.expanduser("~/.hermes")
 PY = os.environ.get("PSYCH_RAG_PY", os.path.join(HERMES, "tools", "psych-rag-env", "bin", "python"))
 SCRIPTS = os.path.join(SKILL_ROOT, "scripts")
+OPERATING_POINT = 0.70   # то же, что в плагине: ⚫ при p ≥ порога метки И p ≥ 0.70
 
 
 def paragraphs(text):
@@ -153,7 +154,8 @@ def main():
     # гейт по правилу навыка: классификатор запускается только на абзацах, где
     # сработали маркеры. Раньше этот файл не гейтился — цифры расходились с плагином.
     gated = bool(hits) and not a.no_gate
-    classifier = call("classifier.py", [text, "--json"] + (["--gated"] if gated else []), 120)
+    classifier = call("classifier.py", [text, "--json"] + (["--gated"] if gated else [])
+                      + ["--min", str(OPERATING_POINT)], 120)
     # полный текст, кусками по 1500 символов: раньше этот файл опрашивал индекс только
     # по первым 1500, хотя плагин — по всему тексту до 4000. Замер на одном тексте:
     # полный запрос даёт «Ложная дилемма» (приём на позиции 3739), срез 1500 — нет.

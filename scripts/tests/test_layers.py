@@ -230,13 +230,13 @@ class TestOpenBugs(unittest.TestCase):
 
     # --- новое, найденное этим проходом ---
     def test_runtime_classifier_operating_point(self):
-        """Правило: ⚫ только при p ≥ порога метки И p ≥ 0.70. В рантайме — только порог."""
+        """Правило: ⚫ при p ≥ порога метки И p ≥ 0.70 — то есть max(порог, 0.70)."""
         plugin = read(PLUGIN)
         ysrc = read(os.path.join(YT, "psych_layer.py"))
         self.assertIn("--min", plugin, "плагин зовёт classifier без --min 0.70")
         self.assertIn("--min", ysrc, "psych_layer зовёт classifier без --min 0.70")
-        self.assertTrue(all(t >= 0.70 for t in classifier.THRESH),
-                        "14 из 23 порогов ниже 0.70 — выдаваемые метки ниже правила")
+        self.assertIn("np.maximum(THRESH, min_conf)", read(os.path.join(SCRIPTS, "classifier.py")),
+                      "операционная точка берётся как max(порог, min_conf)")
 
     def test_thread_definition_is_one_across_paths(self):
         if tele is None:

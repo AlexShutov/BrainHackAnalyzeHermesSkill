@@ -30,6 +30,8 @@ MARK4 = "\n\n[обновление модели]"
 MAX_PARAS = 12          # реальный гейт: не переписывать сообщения длиннее 12 абзацев
 MIN_PARAS = 2           # the skill's auto-trigger threshold
 TIMEOUT = 12
+OPERATING_POINT = 0.70  # правило навыка: ⚫ при p ≥ порога метки И p ≥ 0.70;
+                        # без --min применяется только порог thresholds.npy (14 из 23 ниже 0.70)
 RECHECK_SECONDS = 86400  # перепроверка версии модели не чаще раза в сутки на чат
 _checked = {}            # (platform, chat_id) -> время проверки
 
@@ -111,7 +113,8 @@ def classifier_hits(text, hits):
     if os.environ.get("PSYCH_RAG_CLASSIFIER", "1") != "1" or not hits:
         return None
     try:
-        out = subprocess.run([RAG_PY, CLASSIFIER, text, "--json", "--gated"],
+        out = subprocess.run([RAG_PY, CLASSIFIER, text, "--json", "--gated",
+                              "--min", str(OPERATING_POINT)],
                              capture_output=True, text=True, timeout=TIMEOUT * 3)
         if out.returncode != 0:
             return None
