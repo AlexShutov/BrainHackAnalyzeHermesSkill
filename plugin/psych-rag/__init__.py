@@ -13,7 +13,7 @@ All three layers receive the FULL message text up to the gate limit (4000 chars)
 earlier they got only the first 1500, so messages between 1500 and 4000 passed the
 gate but were analyzed on a fragment (signals after 1500 were invisible).
 """
-import json, os, subprocess, time
+import json, os, re, subprocess, sys, time
 
 HOME = os.environ.get("HERMES_HOME") or os.path.expanduser("~/.hermes")
 SKILL = "brain-hack-analyze"
@@ -27,14 +27,23 @@ MARK = "\n\n[RAG · психология · топ-"
 MARK2 = "\n\n[маркеры в тексте]"
 MARK3 = "\n\n[классификатор (второе мнение)]"
 MARK4 = "\n\n[обновление модели]"
-MAX_PARAS = 12          # do not rewrite very long messages
+MAX_PARAS = 12          # реальный гейт: не переписывать сообщения длиннее 12 абзацев
 MIN_PARAS = 2           # the skill's auto-trigger threshold
 TIMEOUT = 12
-_checked = False
+RECHECK_SECONDS = 86400  # перепроверка версии модели не чаще раза в сутки на чат
+_checked = {}            # (platform, chat_id) -> время проверки
+
+sys.path.insert(0, SKILL_DIR + "/scripts")
+try:
+    import markers as _markers   # каноническое определение абзаца — одна для всех слоёв
+except Exception:
+    _markers = None
 
 
 def paragraphs(text):
-    return [p for p in text.split("\n") if p.strip()]
+    if _markers is not None:
+        return _markers.paragraphs(text)
+    return [p for p in re.split(r"\n+", text) if p.strip()]
 
 
 def retrieve(text):
@@ -64,16 +73,19 @@ def marker_hits(text):
         return None
 
 
-def version_check():
-    """Once per session: compare the stored model version with the hub.
+def version_check(source):
+    """Перепроверка версии модели: один раз на чат, не чаще раза в сутки.
 
-    If an update is warranted the worker marks it as needed and downloads in the
-    background; the model in use keeps serving until the new one is verified.
+    Границы сессии плагину недоступны (нет доступа к session key), поэтому ключ —
+    (platform, chat_id): новый чат получает свою проверку, прежний пересматривается
+    не раньше, чем через сутки.
     """
-    global _checked
-    if _checked:
+    key = (getattr(source, "platform", None), getattr(source, "chat_id", None))
+    now = time.time()
+    last = _checked.get(key)
+    if last is not None and now - last < RECHECK_SECONDS:
         return None
-    _checked = True
+    _checked[key] = now
     try:
         args = [RAG_PY, CHECK, "--json"]
         if os.environ.get("PSYCH_RAG_DRY_RUN") == "1":
@@ -116,11 +128,12 @@ def callback(*args, **kwargs):
     text = getattr(event, "text", "") or ""
     if getattr(event, "internal", False) or MARK in text:
         return None
-    if len(paragraphs(text)) < MIN_PARAS or len(text) > 4000:
+    paras = paragraphs(text)
+    if len(paras) < MIN_PARAS or len(paras) > MAX_PARAS or len(text) > 4000:
         return None
     results = retrieve(text)
     hits = marker_hits(text)
-    notice = version_check()
+    notice = version_check(getattr(event, "source", None))
     cls = classifier_hits(text, hits)
     if not results and not hits and not cls and not notice:
         return None
