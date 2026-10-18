@@ -42,6 +42,11 @@ def text_of(preview, status):
     return (preview + "\n\n" if preview else "") + "Статус:\n" + (status or "").strip()
 
 
+def render(st, status):
+    # превью ВСЕГДА вверху, затем подзаголовок Статус
+    return text_of(st.get("preview"), status)
+
+
 def main():
     cmd = sys.argv[1]
     if cmd == "start":
@@ -50,17 +55,18 @@ def main():
         if not r.get("ok"):
             sys.exit(f"send failed: {r}")
         mid = r["result"]["message_id"]
-        json.dump({"chat_id": chat_id, "message_id": mid}, open(path(key), "w"))
+        json.dump({"chat_id": chat_id, "message_id": mid, "preview": preview.strip()},
+                  open(path(key), "w"))
         print(f"started: {key} -> message {mid}")
     elif cmd in ("update", "done"):
         key = sys.argv[2]
         status = sys.argv[3] if cmd == "update" else "Готово"
         st = json.load(open(path(key)))
         r = api("editMessageText", chat_id=st["chat_id"], message_id=st["message_id"],
-                text=text_of(None, status))
+                text=render(st, status))
         if not r.get("ok") and "message is not modified" not in r.get("description", ""):
             sys.exit(f"edit failed: {r}")
-        print(f"updated: {key} ({status.splitlines()[0][:40]}…)" if len(status) > 40 else f"updated: {key}")
+        print(f"updated: {key}")
     else:
         sys.exit("usage: start|update|done")
 
