@@ -1,5 +1,5 @@
 ---
-name: message-text-analysis
+name: bigbro-analyze
 description: "Use when analyzing text/messages with the video tag system."
 version: 1.0.0
 author: Алексей (via Hermes)

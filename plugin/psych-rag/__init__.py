@@ -1,4 +1,4 @@
-"""psych-rag plugin: guaranteed RAG injection for the message-text-analysis skill.
+"""psych-rag plugin: guaranteed RAG injection for the bigbro-analyze skill.
 
 Uses the supported `pre_gateway_dispatch` hook (policy hook, supports
 {"action": "rewrite", "text"}) — no core patch. When an incoming message is
@@ -13,7 +13,7 @@ the gateway environment stays clean; BM25-only fallback if ONNX cannot load.
 import json, os, subprocess, time
 
 HOME = os.environ.get("HERMES_HOME") or os.path.expanduser("~/.hermes")
-SKILL = "message-text-analysis"
+SKILL = "bigbro-analyze"
 SKILL_DIR = os.environ.get("PSYCH_SKILL_DIR") or os.path.join(HOME, "skills", SKILL)
 RAG_PY = os.environ.get("PSYCH_RAG_PY", os.path.join(HOME, "tools", "psych-rag-env", "bin", "python"))
 QUERY = SKILL_DIR + "/scripts/rag_query.py"
