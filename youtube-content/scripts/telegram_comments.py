@@ -42,13 +42,50 @@ def client():
 
 
 def parse_link(url):
-    # t.me/<channel>/<id> | t.me/c/<internal_id>/<id>
-    parts = url.rstrip("/").rstrip("s").split("/")
-    if "/c/" in url:
-        return f"-100{parts[-2]}", int(parts[-1])
-    if "t.me" in url:
-        return parts[-2], int(parts[-1])
-    return None, None
+    """t.me/<channel>/<id> | t.me/c/<internal_id>/<id> | t.me/s/<channel>/<id>.
+
+    Query и fragment отрезаются до разбора (?t=123 больше не попадает в id).
+    rstrip("s") убран — он портил имена каналов, оканчивающиеся на «s»
+    («kains» → «kain»); вместо него срезается только сегмент-префикс «s»
+    (страница-превью t.me/s/<channel>/<id>).
+    Внутренний id канала возвращается числом с маркером -100, а не строкой.
+    """
+    from urllib.parse import urlsplit
+    u = urlsplit(url)
+    if "t.me" not in (u.netloc or url):
+        return None, None
+    parts = [p for p in u.path.strip("/").split("/") if p]
+    if parts and parts[0] == "t.me":
+        parts = parts[1:]
+    if parts and parts[0] == "s":
+        parts = parts[1:]
+    if len(parts) < 2:
+        return None, None
+    try:
+        post = int(parts[-1])
+    except ValueError:
+        return None, None
+    if parts[0] == "c":
+        # внутренний id канала; Telethon требует PeerChannel с ним, а не «-100<id>»
+        try:
+            return int(parts[1]), post
+        except ValueError:
+            return None, None
+    return parts[-2], post
+
+
+def peer_for(chat):
+    """Telethon-представление канала. «-100<id>» — соглашение Bot API; Telethon
+    читает отрицательные id по своей схеме (marked = -(1e12 + id)), поэтому строку
+    «-1001543» или int -1001543 он трактует как chat 1001543, а не канал 1543.
+    Для канала нужен PeerChannel с внутренним id."""
+    from telethon.tl.types import PeerChannel
+    if isinstance(chat, int):
+        return PeerChannel(chat)
+    s = str(chat)
+    if s.startswith("-100") and s[4:].isdigit():
+        return PeerChannel(int(s[4:]))
+    return chat
 
 
 def cmd_status(_):
@@ -105,8 +142,9 @@ def cmd_comments(a):
     if not chat or not post:
         out({"status": "bad_input", "reason": "нужны --link или --chat + --post"})
         return
+    # --chat может быть строкой «-1001543» (соглашение Bot API) — приводим к peer Telethon
     with client() as c:
-        entity = c.get_entity(chat if isinstance(chat, int) else chat)
+        entity = c.get_entity(peer_for(chat))
         comments, n = [], 0
         for m in c.iter_messages(entity, reply_to=post, limit=a.limit):
             n += 1
