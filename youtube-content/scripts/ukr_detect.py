@@ -1,17 +1,18 @@
 #!/usr/bin/env python3
-"""Украинский/русский язык: детектор + гейт большинства.
+"""Украинский / белорусский / русский: детектор + гейт большинства.
 
 Детерминированный, без LLM и без загрузок:
--Layer 1: уникальные буквы украинского (і, ї, ґ, є) — в русском тексте их нет
-  (кроме имён/транслитерации), поэтому это решающий сигнал для коротких комментариев.
-- Layer 2: служебные слова, которые в украинском отличаются от русского
-  (як, але, якщо, тому що, дуже, вже, ще, тільки, немає, є, вони, був/була/було,
-  між, біля, коло, поблизу, навколо, українськ-, мова).
+- Layer 1: буквы. Решающие для спора uk/be: uk_only — ї, є, ґ (в белорусском их нет);
+  be_only — ў (в украинском её нет). Общая буква і сама язык не решает.
+- Layer 2: слова. UK_WORDS — формы, которые в русском пишутся иначе; BE_WORDS —
+  белорусские формы (гэта, шмат, вельмі, каб, тамуж, паняцці, зразумеў, меў, аўтар…).
+  Побеждает язык с большим числом доказательств; при общей і без слов — 'amb', не решаем.
 
-Гейт большинства: если >70% текста (транскрипт или комментарии) — украинский,
+Гейт большинства: если >70% текста (транскрипт или комментарии) — не русский,
 обработка обычная, 🐷 за язык НЕ ставится. Если большинство русское, а фрагмент
-украинский — это вставка: 🐷 + токсичность по оригиналу (мультиязычный XLM-R)
-и по моему переводу (русские модели, пороги калиброваны под русский).
+украинский или белорусский (оба называются «мова») — это вставка: 🐷 + токсичность
+по оригиналу (мультиязычный XLM-R) и по моему переводу (русские модели, пороги
+калиброваны под русский). В описании называется, какой именно язык.
 
 Использование:
   python3 ukr_detect.py --comments flat.json [--transcript file.txt] [--json]
@@ -20,53 +21,87 @@ flat.json: список {author, text, parent} (формат fetch_comments).
 import argparse, json, re, sys
 from collections import Counter
 
-UK_LETTERS = set("іїґє")
+UK_LETTERS = set("іїєґ")
+# буквы, которых в белорусском нет: они решают спор uk/be
+UK_ONLY = set("їєґ")
+# буква, которая есть только в белорусском
+BE_ONLY = set("ў")
+
+BE_WORDS = {
+    # только формы, которые ОТЛИЧАЮТСЯ от русского; совпадающие с русским сюда не входят
+    "гэта", "гэтага", "гэтае", "гэты", "гэтая", "шмат", "вельмі", "каб", "тамуж",
+    "паняцці", "зразумеў", "зразумела", "меў", "ўвазе", "аўтар", "таксама",
+    "яны", "якая", "які", "якія", "быў", "праўда", "нашы", "вамі", "табе",
+    "ёсць", "хочам", "няма", "таму", "ды", "аб", "па", "ў", "вялік", "малы",
+    "гаварыў", "гаварыла", "маўчаў", "беларус", "беларуск", "моўна",
+}
+# общие uk/be: доказательство «не русский», но язык не решают
+SHARED_UK_BE = {"як", "але", "і"}
 UK_WORDS = {
-    # однозначные: в русском пишутся иначе
-    "як", "але", "якщо", "дуже", "вже", "ще", "тільки", "немає", "є",
+    # однозначные: в русском пишутся иначе И в белорусском иначе (решают спор uk/be)
+    "якщо", "дуже", "вже", "ще", "тільки", "немає", "є",
     "вони", "його", "її", "їх", "був", "була", "було", "має", "мають",
-    "між", "біля", "поблизу", "навколо", "мова", "українськ", "українці",
-    "росіяни", "росія", "національн", "чесно", "підміня", "найкращ",
+    "поблизу", "навколо", "українськ", "українці", "україні",
+    "росіяни", "росія", "чесно", "підміня", "найкращ",
     "отримав", "дід", "вірус", "скачува",
-    "свого", "цьому", "проте", "коли", "хоча", "ті", "наші", "ваші", "мої",
-    "було", "є", "якщо", "тому", "бо", "де", "так", "це", "той", "та",
+    "свого", "цьому", "проте", "коли", "хоча", "наші", "ваші", "мої",
 }
 # неоднозначные (есть и в русском) — считаются только вместе с буквой-маркером
 AMBIG = {"ми", "бо", "де", "так", "це", "той", "та", "нас", "вас", "їм", "тому", "коли", "хоча", "проте"}
 
 def score(text):
     t = text.lower()
-    letters = sum(1 for ch in t if ch in UK_LETTERS)
-    words = 0
-    for w in re.findall(r"[а-яґ]+", t):
+    uk_only = sum(1 for ch in t if ch in UK_ONLY)      # ї, є, ґ — в белорусском нет
+    be_only = sum(1 for ch in t if ch in BE_ONLY)      # ў — в украинском нет
+    shared = 0                                         # і + як/але: «не русский», но язык не решают
+    uk_w = be_w = 0
+    for w in re.findall(r"[а-яіїєґў]+", t):
+        if w in SHARED_UK_BE:
+            shared += 1
         if w in UK_WORDS and w not in AMBIG:
-            words += 1
-    # «є» как отдельное слово-маркер уже в UK_WORDS
-    return letters, words
+            uk_w += 1
+        if w in BE_WORDS:
+            be_w += 1
+    return uk_only, be_only, shared, uk_w, be_w
 
-def is_ukrainian(text, min_letters=2, min_words=1):
-    letters, words = score(text)
-    # буквы-маркёр — решающий сигнал; однозначные слова считаются даже по одному вхождению
-    return letters >= min_letters or words >= min_words
+
+def lang_of(text, min_ev=1):
+    """uk / be / amb / ru. Общая 'і' и общие слова (як, але) сами язык не решают."""
+    uk_only, be_only, shared, uk_w, be_w = score(text)
+    ev_uk = uk_only + uk_w
+    ev_be = be_only + be_w
+    if ev_be > ev_uk:
+        return "be"
+    if ev_uk >= min_ev:
+        return "uk"
+    if shared >= 2:
+        return "amb"          # не русский, но uk/be не различить
+    return "ru"
+
 
 def detect_item(text):
-    """ Возвращает (lang, score) для всего текста и (lang, сегменты) для смешанных. """
-    if is_ukrainian(text):
-        # найти украинские сегменты, если текст смешанный
-        segs = []
-        for sent in re.split(r"[.!?\n]+", text):
-            if is_ukrainian(sent, min_letters=1, min_words=1):
-                segs.append(sent.strip())
-        if segs and len(" ".join(segs)) < len(text) * 0.85:
-            return "mixed", segs
-        return "uk", segs
-    return "ru", []
+    """(lang, segments) — lang всего текста; сегменты с собственным языком для смешанных.
+    Сегменты — clauses (по .,?!;:), чтобы вставка в русском комментарии была видна отдельно."""
+    lang = lang_of(text)
+    if lang == "ru":
+        return "ru", []
+    segs = []
+    for clause in re.split(r"[.!?\n,;:]+", text):
+        clause = clause.strip().strip("«»\"")
+        if not clause:
+            continue
+        cl = lang_of(clause)
+        if cl != "ru":
+            segs.append((cl, clause))
+    if segs and len(" ".join(s for _, s in segs)) < len(text) * 0.85:
+        return "mixed", segs
+    return lang, segs
 
 def majority(items):
     langs = Counter(detect_item(t)[0] for t in items)
     total = sum(langs.values())
-    uk = langs["uk"] + langs["mixed"]
-    return langs, uk / total if total else 0
+    nonru = langs["uk"] + langs["be"] + langs["mixed"]
+    return langs, nonru / total if total else 0
 
 def main():
     ap = argparse.ArgumentParser()
@@ -83,10 +118,10 @@ def main():
         ins = []
         for i, c in enumerate(items):
             lang, segs = detect_item(c["text"])
-            if lang in ("uk", "mixed") and segs:
+            if lang in ("uk", "be", "mixed") and segs:
                 ins.append({"i": i, "author": c.get("author"), "lang": lang,
                             "segments": segs, "text": c["text"][:200]})
-        out["comments"] = {"n": len(items), "langs": dict(langs), "uk_share": round(share, 3),
+        out["comments"] = {"n": len(items), "langs": dict(langs), "nonru_share": round(share, 3),
                            "insertions": ins}
     if a.transcript:
         raw = open(a.transcript).read()
@@ -98,11 +133,11 @@ def main():
         ins = []
         for idx, (line, t) in enumerate(zip(paras, paras)):
             lang, segs = detect_item(t)
-            if lang in ("uk", "mixed") and segs:
+            if lang in ("uk", "be", "mixed") and segs:
                 ts = re.match(r"^(\d+:\d+(?::\d+)?)", line)
                 ins.append({"t": ts.group(1) if ts else None, "lang": lang,
                             "segments": segs, "text": t[:200]})
-        out["transcript"] = {"n": len(texts), "langs": dict(langs), "uk_share": round(share, 3),
+        out["transcript"] = {"n": len(texts), "langs": dict(langs), "nonru_share": round(share, 3),
                              "insertions": ins}
     print(json.dumps(out, ensure_ascii=False, indent=1) if a.json else json.dumps(out, ensure_ascii=False))
 

@@ -135,19 +135,25 @@ Emoji mapping for comments (one tag per comment): 💸 — продающий/м
 
 Legacy lexicon path (`scripts/comment_sentiment.py`) remains for cross-checks and for Rutube/Telegram comments where the neural models are not run; when both are available, deliver the neural numbers and note the difference.
 
-## Ukrainian language pass (правило пользователя, 2026-10-18)
+## Ukrainian / Belarusian language pass (правило пользователя, 2026-10-18)
 
-Trigger: any analysis — comments and transcript are checked for Ukrainian ("мова").
+Trigger: any analysis — comments and transcript are checked for «мова» (both Ukrainian and Belarusian are called мова).
 
-- **Gate (deterministic, no LLM):** `scripts/ukr_detect.py` — distinctive Ukrainian letters (і, ї, ґ, є; in Russian text they never occur except names/transliteration) + unambiguous function words (як, але, якщо, вони, його, чесно, найкращий, підміня, дід, немає, вже, ще, тільки…). Majority share computed separately for the transcript and for the comments.
-- **If the majority is Ukrainian** (transcript AND comments) → process as usual, 🐷 for language is NOT applied; the delivery is in Russian (my own translation of the content — no local MT model, say so if machine translation was requested).
-- **If the majority is Russian and a fragment is Ukrainian** → that fragment is an insertion: mark 🐷 (primary tag) and assess toxicity carefully, two paths, both reported:
-  1. **On the original** — the multilingual XLM-R classifier (`scripts/classifier.py`, native Ukrainian, no translation loss): primary verdict for manipulation devices.
+- **Gate (deterministic, no LLM):** `scripts/ukr_detect.py` — two layers:
+  - letters that decide the uk/be dispute: **ї, є, ґ** (Belarusian has none of them) vs **ў** (Ukrainian has none). The shared **і** does NOT decide the language by itself.
+  - words: `UK_WORDS` = forms that differ from Russian AND from Belarusian; `BE_WORDS` = Belarusian forms that differ from Russian (гэта, шмат, вельмі, каб, тамуж, паняцці, зразумеў, меў, аўтар, яны, праўда…). Words identical to Russian must never be in BE_WORDS — «мне», «мой», «была» produced 60 false insertions on 800 live comments before the list was tightened. Shared uk/be words (як, але) prove «not Russian» but not which language → `amb`.
+  - Majority share computed separately for the transcript and for the comments.
+- **If the majority is non-Russian** (transcript AND comments) → process as usual, 🐷 for language is NOT applied; the delivery is in Russian (my own translation of the content — no local MT model, say so if machine translation was requested).
+- **If the majority is Russian and a fragment is Ukrainian or Belarusian** → that fragment is an insertion: mark 🐷 (primary tag), name the language in the description, and assess toxicity carefully, two paths, both reported:
+  1. **On the original** — the multilingual XLM-R classifier (`scripts/classifier.py`, native uk/be, no translation loss): primary verdict for manipulation devices.
   2. **On my Russian translation** — the Russian-calibrated models (rubert-tiny-toxicity, Kostya165 sarcasm, emotion), because the 🤢/🤮 bands and thresholds are calibrated for Russian.
-  If the two paths disagree, show both verdicts — never silently pick one. Translation of isolated insertions is my own reading (accurate); bulk machine translation is not available locally — state that plainly.
-- If the insertion is ALSO praise of Ukraine/VСУ/strikes on Russia, 🐷 covers both meanings; the description names which (language insertion, praise, or both).
-- In the comments block, Ukrainian insertions are reported as a separate line: count + share of the fetched set, no nicknames (existing rule), with the toxicity verdict per insertion.
-- **Neural pass must load mmap-free** (`scripts/neural_pass.py`): the default transformers path mmaps safetensors weights, and under memory pressure on this 16 GB machine macOS cannot fault those pages in — the first Linear layer dies with SIGBUS inside Apple Accelerate BLAS (`cblas_dgemm_singlecore`). Reading the file bytes into RAM (`safetensors.torch.load(open(path,'rb').read())` + `from_config` + `load_state_dict`) avoids the mmap and the forward works even with ~200 MB free. The ONNX classifier path is unaffected (onnxruntime copies the model into its own buffers). `resource_tracker ... leaked semaphore` warnings are shutdown noise, not an accumulating leak. Drop `bert.embeddings.position_ids` when loading state_dict (unexpected key).
+  If the two paths disagree, show both verdicts — never silently pick one.
+- If the insertion is ALSO praise of Ukraine/VСУ/strikes on Russia, 🐷 covers both meanings; the description names which (language insertion, praise, or both). Belarusian insertion is 🐷 as a language marker, not as praise.
+- In the comments block, insertions are reported as a separate line: count + share of the fetched set, no nicknames (existing rule), with the toxicity verdict per insertion and the language named.
+- **Pitfall (recall):** the word regex must include і, ї, є, ґ — they are outside the `а-я` range, so `[а-я]+` splits «дід», «вірус», «Україні» into fragments and word evidence silently stops working. Use `[а-яіїєґў]+`.
+- **Verified battery** (run before trusting the gate): Belarusian samples → `be`; Ukrainian controls → `uk`; Russian controls clean, including «наш» and the name «Іван» (single shared і does not fire); short ambiguous case → `amb`, not guessed.
+
+**Neural pass must load mmap-free** (`scripts/neural_pass.py`): the default transformers path mmaps safetensors weights, and under memory pressure on this 16 GB machine macOS cannot fault those pages in — the first Linear layer dies with SIGBUS inside Apple Accelerate BLAS (`cblas_dgemm_singlecore`). Reading the file bytes into RAM (`safetensors.torch.load(open(path,'rb').read())` + `from_config` + `load_state_dict`) avoids the mmap and the forward works even with ~200 MB free. The ONNX classifier path is unaffected (onnxruntime copies the model into its own buffers). `resource_tracker ... leaked semaphore` warnings are shutdown noise, not an accumulating leak. Drop `bert.embeddings.position_ids` when loading state_dict (unexpected key).
 
 Run on every analysis (after fetching comments):
 
