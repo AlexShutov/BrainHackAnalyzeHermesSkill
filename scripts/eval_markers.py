@@ -15,8 +15,12 @@ import markers as M
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 EVAL = json.load(open(os.path.join(HERE, "..", "psychology", "eval_set.json"), encoding="utf-8"))
+DEVICES = json.load(open(os.path.join(HERE, "..", "psychology", "devices.json"), encoding="utf-8"))["devices"]
 
-DEVICE_FAMILIES = {"логические", "эмоции и авторитет", "язык", "данные", "структура вывода"}
+# семейства берутся из devices.json, а не из жёсткого списка: прежний список
+# содержал «логические», которого в devices.json нет, и не содержал «фокусы языка
+# (Дилтс)» и «сквозные» — family-recall мерился не по тому словарю.
+DEVICE_FAMILIES = {d["family"] for d in DEVICES}
 NLP_DEV_FAMILIES = {"приёмы внушения (книга)", "фокусы языка (Дилтс)"}
 
 
@@ -74,6 +78,8 @@ def main():
         "subtype_routing_acc": round(subtype_ok * 100 / subtype_n, 1) if subtype_n else None,
         "subtype_routed_n": subtype_n,
         "zero_recall_devices": [p["device"] for p in per_device if p["recall"] is None],
+        "map_unknown_values": M.unknown_map_values(),
+        "map_missing_families": M.unmapped_families(),
     }
     if "--json" in sys.argv:
         print(json.dumps(report, ensure_ascii=False, indent=1))
