@@ -9,6 +9,9 @@ receives the passages.
 
 Retrieval is executed as a subprocess against the RAG venv (fastembed/ONNX), so
 the gateway environment stays clean; BM25-only fallback if ONNX cannot load.
+All three layers receive the FULL message text up to the gate limit (4000 chars) —
+earlier they got only the first 1500, so messages between 1500 and 4000 passed the
+gate but were analyzed on a fragment (signals after 1500 were invisible).
 """
 import json, os, subprocess, time
 
@@ -36,8 +39,10 @@ def paragraphs(text):
 
 def retrieve(text):
     try:
-        out = subprocess.run([RAG_PY, QUERY, text[:1500]], capture_output=True, text=True,
-                             timeout=TIMEOUT)
+        # таймаут был рассчитан на срез 1500; на полном тексте embedding занимает
+        # ~6 с (замер: 3.2 с на 1500, 6.2 с на 4000), поэтому запас увеличен
+        out = subprocess.run([RAG_PY, QUERY, text], capture_output=True, text=True,
+                             timeout=TIMEOUT * 2)
         if out.returncode != 0:
             return None
         data = json.loads(out.stdout)
@@ -49,7 +54,7 @@ def retrieve(text):
 def marker_hits(text):
     """Surface signals present in the text itself — no terminology required."""
     try:
-        out = subprocess.run(["python3", MARKERS, text[:1500], "--json"],
+        out = subprocess.run([RAG_PY, MARKERS, text, "--json"],
                              capture_output=True, text=True, timeout=TIMEOUT)
         if out.returncode != 0:
             return None
@@ -94,7 +99,7 @@ def classifier_hits(text, hits):
     if os.environ.get("PSYCH_RAG_CLASSIFIER", "1") != "1" or not hits:
         return None
     try:
-        out = subprocess.run([RAG_PY, CLASSIFIER, text[:1500], "--json", "--gated"],
+        out = subprocess.run([RAG_PY, CLASSIFIER, text, "--json", "--gated"],
                              capture_output=True, text=True, timeout=TIMEOUT * 3)
         if out.returncode != 0:
             return None
