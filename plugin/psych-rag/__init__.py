@@ -9,8 +9,9 @@ receives the passages.
 
 Retrieval is executed as a subprocess against the RAG venv (fastembed/ONNX), so
 the gateway environment stays clean; BM25-only fallback if ONNX cannot load.
-All three layers receive the FULL message text up to the gate limit (4000 chars) —
-earlier they got only the first 1500, so messages between 1500 and 4000 passed the
+All three layers receive the FULL message text up to the gate limit (4096 chars — the
+platform limit; it used to be 4000, so messages 4001-4096 were never analyzed at all) —
+earlier they got only the first 1500, so messages between 1500 and the gate passed the
 gate but were analyzed on a fragment (signals after 1500 were invisible).
 """
 import json, os, re, subprocess, sys, time
@@ -29,6 +30,9 @@ MARK3 = "\n\n[классификатор (второе мнение)]"
 MARK4 = "\n\n[обновление модели]"
 MAX_PARAS = 12          # реальный гейт: не переписывать сообщения длиннее 12 абзацев
 MIN_PARAS = 2           # the skill's auto-trigger threshold
+MAX_CHARS = 4096        # гейт обязан равняться фактическому лимиту платформы: при 4000
+                        # сообщения 4001–4096 символов не разбирались вообще, и это
+                        # выглядело как пропуск анализа, а не как отказ гейта
 TIMEOUT = 12
 OPERATING_POINT = 0.70  # правило навыка: ⚫ при p ≥ порога метки И p ≥ 0.70;
                         # без --min применяется только порог thresholds.npy (14 из 23 ниже 0.70)
@@ -132,7 +136,7 @@ def callback(*args, **kwargs):
     if getattr(event, "internal", False) or MARK in text:
         return None
     paras = paragraphs(text)
-    if len(paras) < MIN_PARAS or len(paras) > MAX_PARAS or len(text) > 4000:
+    if len(paras) < MIN_PARAS or len(paras) > MAX_PARAS or len(text) > MAX_CHARS:
         return None
     results = retrieve(text)
     hits = marker_hits(text)
