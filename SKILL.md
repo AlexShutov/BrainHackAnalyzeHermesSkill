@@ -62,6 +62,17 @@ Before marking, query the local psychology index — one call per analysis:
 - The `psych-rag` plugin (`pre_gateway_dispatch`) appends three blocks to multi-paragraph inbound messages automatically: the retrieved passages, the marker hits from `scripts/markers.py`, and — only when markers fired — the classifier's second opinion. Single-paragraph messages are not rewritten. Gate (реальный, не объявленный): абзацев ≥2 и ≤12 (`MAX_PARAS` применяется), длина ≤4000 символов — порог обязан равняться фактическому лимиту платформы (Telegram 4096), иначе сообщения 4001–4096 символов не разбираются вообще и это выглядит как пропуск анализа, а не как отказ гейта. Абзац — каноническое определение из `markers.paragraphs` (строка до перевода строки); плагин больше не держит своё, поведение то же, но источник один. Все три слоя получают полный текст сообщения до порога гейта (4000 символов), а не первые 1500: раньше сигналы после 1500-го символа были невидимы, и сообщение между 1500 и 4000 проходило гейт, но не анализировалось. Замер: 1725-символьное сообщение с маркером на позиции 1655 — на полном тексте 2 маркера, на прежнем срезе 0. Таймаут retrieval поднят до 2× (полный текст ~6.2 с против 3.2 с на срезе). Маркеры запускаются через venv-интерпретатор, а не через системный `python3` (на 3.9 PEP 604 падает).
 - Retrieval supplements the list, it never replaces it: a device that exists in the list but not in the corpus must still be applied from the list.
 
+## Тесты
+
+`scripts/tests/test_layers.py` (unittest, stdlib; ONNX/HF не грузятся — модели подменяются фиксами). Запуск:
+`/Users/alex/.hermes/tools/psych-rag-env/bin/python scripts/tests/test_layers.py`
+
+Два блока:
+- **A — регрессия на исправленном** (8 тестов, проходят): пара у repetition-метки, гейт по повтору, кускование длинного абзаца (метка из хвостового куска), позиции `window()` на строке, меняющей длину при `lower()`, `limit=0 → None` в telegram-пути, границы слов и переворот отрицания в лексиконе, словарь и границы `ukr_detect`, `--chunk` у обоих вызывающих rag_query.
+- **B — правила, которые кодом не реализованы** (10 тестов, падают): это и есть остаток багов — гейт 4000 против фактического лимита 4096, правило имён собственных, фрагменты ≤3 слов, amb в доле не-русского, недостижимые правила END_MAP, отсутствие порога у `side_share`, расхождение side/ukr_detect, отсутствие контроля 4096 и 429 у status_post, порядок ничьи в telegram-пути, None-метка в neural_pass.
+
+Тесты блока B не чинят баг — они фиксируют расхождение правила с кодом и должны начать проходить после исправления. Замер слоя (`scripts/eval_markers.py` на `psychology/eval_set.json`) — отдельный, in-domain; живые цитаты в него не смешивать.
+
 ## Rules
 
 - Источники для ⚫: закрытый список приёмов — `references/manipulation-devices.md`; корпус (книга по манипуляциям в `psychology/` — FB2 + извлечённый текст) опрашивается retrieval-ом по правилам `local-rag-on-weak-hardware`. Статическая карта списка подаётся всегда, retrieval добавляет определения и примеры из корпуса — так список не «плывёт» от запроса к запросу.
