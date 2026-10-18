@@ -10,6 +10,7 @@ Usage:
   python3 book_ingest_pdf.py <book.pdf> [--out FILE] [--source "Book title"]
 """
 import argparse, json, os, re, sys
+from util import read_lines
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 BOOKS = os.path.join(os.path.dirname(HERE), "psychology", "books")
@@ -103,7 +104,7 @@ def main():
             fh.write(json.dumps({"section": sec, "text": p}, ensure_ascii=False) + "\n")
             n += 1
     secs = {}
-    for line in open(out, encoding="utf-8"):
+    for line in read_lines(out):
         d = json.loads(line)
         secs[d["section"]] = secs.get(d["section"], 0) + 1
     print(f"paragraphs: {n} -> {out}")

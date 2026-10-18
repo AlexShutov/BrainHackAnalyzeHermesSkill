@@ -51,11 +51,20 @@ def handle(msg):
         args = msg["params"].get("arguments", {})
         if name != TOOL["name"]:
             return {"content": [{"type": "text", "text": f"unknown tool: {name}"}], "isError": True}
-        qvec = None
+        query = args["query"]
+        # Длинный запрос делится на куски — тот же путь, что и rag_query: embedding видит
+        # только первые ~512 токена, и устройства из хвоста длинного текста без кусков не
+        # находятся никогда. MCP — основной путь по правилу навыка, поэтому chunk обязателен
+        # и здесь, а не только в CLI.
+        chunks = R.chunks_of(query)
+        qvecs = None
         m = get_model()
         if m is not False:
-            qvec = list(m.embed([args["query"]]))[0]
-        res = R.search(args["query"], top_k=int(args.get("top_k", R.TOP_K)), qvec=qvec)
+            try:
+                qvecs = [list(m.embed([c]))[0] for c in chunks]
+            except Exception:
+                qvecs = None
+        res = R.merge_chunked(chunks, top_k=int(args.get("top_k", R.TOP_K)), qvecs=qvecs)
         if not res:
             return {"content": [{"type": "text", "text": "ничего не найдено (ни lexical, ни semantic) — не выдумывать метки"}]}
         lines = [f"[{r['kind']} · {r['label']} · {r['score']}] {r['snippet']}" for r in res]

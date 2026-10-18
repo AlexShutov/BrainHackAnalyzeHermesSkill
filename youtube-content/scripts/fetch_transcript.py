@@ -50,8 +50,12 @@ def format_timestamp(seconds: float) -> str:
 def fetch_transcript(video_id: str, languages: list | None = None):
     """Fetch transcript segments from YouTube.
 
-    Returns a list of dicts with 'text', 'start', and 'duration' keys.
-    Compatible with youtube-transcript-api v1.x.
+    Returns (segments, language, is_generated) — язык и признак автосубтитров нужны,
+    потому что docstring обещает поле language в выводе, и потому что авто-трек
+    содержит ошибки распознавания имён и брендов: без признака «generated» читатель не
+    знает, какой это транскрипт. v1.x отдаёт язык на объекте FetchedTranscript.
+
+    Segments are dicts with 'text', 'start', and 'duration' keys.
     """
     try:
         from youtube_transcript_api import YouTubeTranscriptApi
@@ -67,10 +71,11 @@ def fetch_transcript(video_id: str, languages: list | None = None):
         result = api.fetch(video_id)
 
     # v1.x returns FetchedTranscriptSnippet objects; normalize to dicts
-    return [
+    segments = [
         {"text": seg.text, "start": seg.start, "duration": seg.duration}
         for seg in result
     ]
+    return segments, getattr(result, "language", None), bool(getattr(result, "is_generated", False))
 
 
 def main():
@@ -88,7 +93,7 @@ def main():
     languages = [l.strip() for l in args.language.split(",")] if args.language else None
 
     try:
-        segments = fetch_transcript(video_id, languages)
+        segments, language, generated = fetch_transcript(video_id, languages)
     except Exception as e:
         error_msg = str(e)
         if "disabled" in error_msg.lower():
@@ -110,6 +115,8 @@ def main():
 
     result = {
         "video_id": video_id,
+        "language": language,                 # обещано docstring — раньше main его не печатал
+        "generated": generated,               # авто-трек: ошибки распознавания имён и брендов
         "segment_count": len(segments),
         "duration": format_timestamp(segments[-1]["start"] + segments[-1]["duration"]) if segments else "0:00",
         "full_text": full_text,

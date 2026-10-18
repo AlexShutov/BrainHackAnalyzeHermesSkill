@@ -10,10 +10,11 @@
 """
 import json, re, sys, os, collections
 import side   # боковой канал (укр/бел) — отдельный набор, не смешивается с основным языком
+from util import load_json
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-MARKERS = json.load(open(os.path.join(os.path.dirname(HERE), "psychology", "markers.json"), encoding="utf-8"))
-DEVICES = json.load(open(os.path.join(os.path.dirname(HERE), "psychology", "devices.json"), encoding="utf-8"))
+MARKERS = load_json(os.path.join(os.path.dirname(HERE), "psychology", "markers.json"))
+DEVICES = load_json(os.path.join(os.path.dirname(HERE), "psychology", "devices.json"))
 
 # какие семейства устройств правдоподобны для каждого семейства маркеров.
 # Значения обязаны быть реальными именами устройств ИЛИ реальными семействами
@@ -60,6 +61,21 @@ def paragraphs(text):
     и индексы абзацев не совпадали с классификатором."""
     return [p for p in re.split(r"\n+", text) if p.strip()]
 
+# Класс значимых слов для повтора и стоп-лист к нему — ОДИН источник. Раньше стоп-лист
+# был строкой из 29 слов, 28 из которых короче класса {4,}: они никогда не могли быть
+# выданы regex, список создавал иллюзию фильтрации, а настоящие служебные слова
+# («очень», «просто», «также», «именно») считались значимыми и давали ложный повтор.
+SIGNIFICANT_CLASS = r"[а-яё]{4,}"
+STOP = {
+    # только слова, достижимые классом {4,}
+    "также", "очень", "просто", "именно", "вообще", "всегда", "когда", "если", "потому",
+    "поэтому", "только", "можно", "нужно", "надо", "вроде", "значит", "однако", "кстати",
+    "конечно", "возможно", "кажется", "действительно", "пожалуй", "какой", "какие",
+    "такой", "такая", "такое", "здесь", "потом", "перед", "после", "между", "через",
+    "около", "вокруг", "себя", "себе", "меня", "тебя", "наши", "наше", "наша",
+    "ваша", "ваше", "ваши", "чтобы", "чтоб", "либо",
+}
+
 def paragraph_spans(text):
     """Те же абзацы, но с позициями — чтобы hit нес свой абзац, а не искался по подстроке.
 
@@ -94,14 +110,13 @@ def scan(text):
     # повтор тезиса: совпадение значимых слов между абзацами
     paras = paragraphs(text)
     if len(paras) > 1:
-        stop = set("и в не на что как это то он она они мы вы я к с у о для по из но а также же ну да уж вот".split())
-        sets = [set(re.findall(r"[а-яё]{4,}", p.lower())) - stop for p in paras]
+        sets = [set(re.findall(SIGNIFICANT_CLASS, p.lower())) - STOP for p in paras]
         # Боковой набор — отдельно от основного языка: каждое слово приводится к русской
         # форме, и сравнение идёт только внутри бокового набора. Основной набор не трогается,
         # боковой hit сообщается только там, где хотя бы в одном абзаце есть боковое слово —
         # так ловится повтор тезиса через язык (мова ↔ русский), а не дублируется обычный
         # повтор на основном языке.
-        side_sets = [set(side.to_ru(w) for w in re.findall(side.SIDE_CLASS, p) if len(w) >= 4) - stop for p in paras]
+        side_sets = [set(side.to_ru(w) for w in re.findall(side.SIDE_CLASS, p) if len(w) >= 4) - STOP for p in paras]
         side_count = [side.side_words(p)[1] for p in paras]
         for i in range(len(paras)):
             for j in range(i + 1, len(paras)):

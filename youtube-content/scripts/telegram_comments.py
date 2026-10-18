@@ -16,6 +16,8 @@ Subcommands:
 Output: one JSON line on stdout. Never prints secrets.
 """
 import argparse, json, os, stat, sys
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "scripts"))
+from util import load_json, read_text
 
 HOME = os.path.dirname(os.path.abspath(__file__))
 STATE = os.environ.get("TG_USER_STATE", os.path.expanduser("~/.hermes/tools/telegram-user"))
@@ -30,7 +32,7 @@ def out(obj):
 
 def load_config():
     try:
-        return json.load(open(CONFIG, encoding="utf-8"))
+        return load_json(CONFIG)
     except Exception:
         return None
 
@@ -113,7 +115,7 @@ def cmd_login(a):
                 fh.write(sent.phone_code_hash)
             out({"status": "code_sent", "hint": "код пришёл в Telegram — повторить login с --code"})
             return
-        phone_hash = open(CODEHASH).read().strip() if os.path.exists(CODEHASH) else None
+        phone_hash = read_text(CODEHASH).strip() if os.path.exists(CODEHASH) else None
         try:
             c.sign_in(phone=a.phone, code=a.code, phone_code_hash=phone_hash)
         except Exception as e:

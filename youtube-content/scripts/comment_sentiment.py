@@ -46,7 +46,8 @@ DISCONTENT = [
     "неэффективн", "бесполезн", "бессмысленн", "не работает",
     "не получается", "не успе", "не готов", "не заточен", "не выполняет",
     "не верят", "не ценят", "не уважают", "игнорируют", "замалчива",
-    "не надо", "не нужен", "не нужна", "не нужны",
+    # «не надо» уже стоит выше — дубликат заставлял считать одно и то же слово дважды
+    "не нужен", "не нужна", "не нужны",
 ]
 CATS = {"злость": ANGER, "радость": JOY, "недовольство": DISCONTENT}
 
@@ -135,7 +136,9 @@ def thread_homogeneity(threads, by_id):
         ccount = {}
         for m in stance:
             ccount[m["cat"]] = ccount.get(m["cat"], 0) + 1
-        dom = max(ccount, key=lambda k: ccount[k])
+        # ничья решается по TIE_ORDER — тому же порядку, что и classify;
+        # раньше здесь был порядок словаря (фактически порядок появления слов в тексте)
+        dom = sorted(ccount.items(), key=lambda kv: (-kv[1], TIE_ORDER.index(kv[0])))[0][0]
         hom = round(100 * ccount[dom] / len(stance))
         hom_sum += hom * len(stance); hom_n += len(stance)
         p = by_id.get(pid) or members[0]

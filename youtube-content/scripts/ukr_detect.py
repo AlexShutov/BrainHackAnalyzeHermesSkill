@@ -18,8 +18,16 @@
   python3 ukr_detect.py --comments flat.json [--transcript file.txt] [--json]
 flat.json: список {author, text, parent} (формат fetch_comments).
 """
-import argparse, json, re, sys
+import argparse, json, os, re, sys
 from collections import Counter
+
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "scripts"))
+import side  # общий боковой слой — один порог на оба пути, иначе два слоя расходятся
+from util import load_json
+
+# Токен целиком, с регистром: боковые буквы (і ї є ґ ў) должны входить в класс, иначе
+# слово «быў» резалось на «бы» и белорусское доказательство терялось.
+TOKEN_RE = re.compile(r"[A-Za-zА-Яа-яЁёіїєґўІЇЄҐЎ]+")
 
 UK_LETTERS = set("іїєґ")
 # буквы, которых в белорусском нет: они решают спор uk/be
@@ -68,15 +76,24 @@ def word_hit(tok, entries):
 
 
 def score(text):
-    """(uk_ev, be_ev, shared, weak_be) — доказательство считается ОДИН РАЗ на слово.
+    """(uk_ev, be_ev, shared, ambl, weak_be) — доказательство считается ОДИН РАЗ на слово.
 
     Раньше одно и то же слово считалось дважды (как буква-маркер и как слово из
     словаря), из-за чего одиночное «є» давало два доказательства и решало язык.
     Буквы считаются по слову, а не по символу: слово с тремя marker-буквами не
-    должно перевешивать несколько слов."""
-    t = text.lower()
-    uk_ev = be_ev = shared = weak_be = 0
-    for w in re.findall(r"[а-яіїєґў]+", t):
+    должно перевешивать несколько слов.
+
+    Имя собственное язык не решает: токен с заглавной буквы исключается из
+    доказательства. «Євгененко вышел из дома» — единственное доказательство было
+    фамилия в украинской орфографии, и 🐷 за неё ставиться не должно. Цена правила:
+    украинское слово в начале предложения тоже читается как имя и доказательства не
+    даёт — это осознанный обмен, правило пользователя важнее.
+    """
+    uk_ev = be_ev = shared = ambl = weak_be = 0
+    for tok in TOKEN_RE.findall(text):
+        if tok[:1].isupper():
+            continue                      # имя собственное / начало предложения
+        w = tok.lower()
         e_uk = any(ch in UK_ONLY for ch in w) or word_hit(w, UK_WORDS)
         e_be = any(ch in BE_ONLY for ch in w) or word_hit(w, BE_WORDS)
         if e_uk and e_be:
@@ -87,9 +104,11 @@ def score(text):
             be_ev += 1
         elif w in SHARED_UK_BE:
             shared += 1
+        elif w in AMBIG:
+            ambl += 1                        # неоднозначное: само язык не решает
         elif w in WEAK:
             weak_be += 1
-    return uk_ev, be_ev, shared, weak_be
+    return uk_ev, be_ev, shared, ambl, weak_be
 
 
 def lang_of(text, min_ev=1):
@@ -99,18 +118,38 @@ def lang_of(text, min_ev=1):
     русском, буква ў нет в украинском — одно слово с такой буквой уже определяет
     язык. Но доказательство считается один раз на слово (не дважды: буква + словарь),
     и омонимы с русским (па, ды, якая, тому…) язык не решают: они только усиливают
-    уже решённый язык. Русское «па был в доме» не должно становиться белорусским."""
-    uk_ev, be_ev, shared, weak_be = score(text)
+    уже решённый язык. Русское «па был в доме» не должно становиться белорусским.
+
+    AMBIG участвует в решении: без маркера неоднозначные слова язык не решают, но текст
+    уже не русский — «це ми бачили де так» раньше молча уходило в ru.
+    WEAK участвует как усиление: одна омонимичная форма язык не решает, но при точной
+    ничье решающих доказательств две формы одного языка решают спор.
+
+    Фрагмент из ≤3 слов язык не решает — кроме случая, когда весь фрагмент состоит из
+    боковых слов (доля = 1.0, это язык текста, а не вставка). Порог — side.SIDE_THRESHOLD,
+    общий для обоих слоёв: раньше lang_of решал по числу доказательств, а side — по доле,
+    и на одном фрагменте они давали разные вердикты.
+    """
+    uk_ev, be_ev, shared, ambl, weak_be = score(text)
     if uk_ev == 0 and be_ev == 0:
-        # противоречие с docstring снято: общая `і` и общие uk/be слова (як, але) —
-        # это доказательство «не русский», но язык оно не решает. Раньше такой текст
-        # молча уходил в `ru`, то есть украиноязычная фраза без ї/є/ґ читалась русским.
-        return "amb" if shared else "ru"
+        # Два слоя обязаны совпадать в классе: если боковой слой (графика) говорит, что
+        # весь фрагмент — мова, морфология не имеет права называть его русским. Конкретный
+        # язык она решает только по решающей букве: «маніпуляцыя» — мова, но uk или be —
+        # не решаем, потому что общая 'і' сама язык не решает.
+        if side.is_side_language(text):
+            return "amb"
+        return "amb" if (shared or ambl) else "ru"
+    words = [t for t in TOKEN_RE.findall(text) if not t[:1].isupper()]
+    if len(words) <= 3 and side.side_share(text) < side.SIDE_THRESHOLD:
+        return "amb"
     if be_ev > uk_ev:
         return "be" if be_ev >= min_ev else "amb"
     if uk_ev > be_ev:
         return "uk" if uk_ev >= min_ev else "amb"
-    # равное число решающих доказательств — язык не решаем
+    # точная ничья решающих доказательств: омонимы сами язык не решают, но если
+    # их несколько и они склоняются к одному языку — решают спор
+    if weak_be >= 2:
+        return "be"
     return "amb"
 
 
@@ -136,16 +175,20 @@ def majority(items):
     """Правило навыка: >70% — это доля ТЕКСТА, а не доля комментариев.
     Раньше share считался по числу items: один короткий украинский комментарий
     среди длинных русских давал 0.5, хотя по объёму текста там было 2%.
-    Возвращаю обе доли: share_chars (правило) и share_items (для сверки)."""
+    Возвращаю обе доли: share_chars (правило) и share_items (для сверки).
+
+    amb — не язык и в долю не-русского не входит: он означает «доказательство есть,
+    язык не решён». Раньше amb считался, и один спорный комментарий поднимал долю."""
+    DECIDED = ("uk", "be", "mixed")
     langs, chars, total = Counter(), 0, 0
     for t in items:
         l = detect_item(t)[0]
         langs[l] += 1
         total += len(t)
-        if l in ("uk", "be", "mixed", "amb"):
+        if l in DECIDED:
             chars += len(t)
     share_chars = chars / total if total else 0
-    share_items = sum(v for k, v in langs.items() if k in ("uk", "be", "mixed", "amb")) / sum(langs.values()) if langs else 0
+    share_items = sum(v for k, v in langs.items() if k in DECIDED) / sum(langs.values()) if langs else 0
     return langs, share_chars, share_items
 
 def main():
@@ -157,7 +200,7 @@ def main():
 
     out = {}
     if a.comments:
-        items = json.load(open(a.comments))
+        items = load_json(a.comments)
         texts = [c["text"] for c in items]
         langs, share_chars, share_items = majority(texts)
         ins = []

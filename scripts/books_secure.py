@@ -15,6 +15,7 @@ corpus/manifest.local.json (also git-ignored).
 import base64, hashlib, json, os, tempfile, unicodedata
 
 from cryptography.fernet import Fernet
+from util import load_json, write_json
 
 ENCRYPT_KEY = "brainhack-corpus-v1::7books::do-not-drop"
 _CORPUS = os.path.join(os.path.dirname(os.path.abspath(__file__)), os.pardir, "psychology", "corpus")
@@ -43,7 +44,7 @@ def _manifest() -> dict:
     m = dict(REFERENCE_MAP)
     if os.path.exists(LOCAL_MANIFEST):
         try:
-            m.update(json.load(open(LOCAL_MANIFEST, encoding="utf-8")))
+            m.update(load_json(LOCAL_MANIFEST))
         except Exception:
             pass
     return m
@@ -110,11 +111,11 @@ def encrypt_new_books() -> int:
         m = {}
         if os.path.exists(LOCAL_MANIFEST):
             try:
-                m = json.load(open(LOCAL_MANIFEST, encoding="utf-8"))
+                m = load_json(LOCAL_MANIFEST)
             except Exception:
                 m = {}
         m[str(n)] = base64.b64encode(src.encode("utf-8")).decode("ascii")
-        json.dump(m, open(LOCAL_MANIFEST, "w", encoding="utf-8"), ensure_ascii=False, indent=1)
+        write_json(LOCAL_MANIFEST, m)
         used.add(n)
         n_new += 1
     return n_new

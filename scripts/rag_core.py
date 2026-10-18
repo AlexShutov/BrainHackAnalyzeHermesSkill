@@ -38,7 +38,12 @@ def q_tokens(query):
             toks.append(w)
     return toks
 
-def open_db():
+def open_db(readonly=True):
+    """Запросная часть обязана открывать БД только для чтения: путь построения индекса
+    держит write-лок, и обычное connect() на чтении ловит 'database is locked'.
+    CREATE TABLE остаётся только в пути построения (там, где есть право на запись)."""
+    if readonly and os.path.exists(DB_PATH):
+        return sqlite3.connect(f"file:{DB_PATH}?mode=ro", uri=True)
     con = sqlite3.connect(DB_PATH)
     con.execute("CREATE TABLE IF NOT EXISTS docs(id INTEGER PRIMARY KEY, kind TEXT, label TEXT, text TEXT)")
     con.execute("CREATE TABLE IF NOT EXISTS vec(id INTEGER PRIMARY KEY REFERENCES docs(id), blob BLOB)")
@@ -94,6 +99,7 @@ def snippet(text, limit=180):
     return out.strip() or s[:limit]
 
 def search(query, top_k=TOP_K, min_score=MIN_SCORE, con=None, qvec=None):
+    own = con is None
     con = con or open_db()
     lex = bm25_scores(con, query)
     cos = cosine_scores(con, qvec) if qvec is not None else {}
@@ -136,4 +142,41 @@ def search(query, top_k=TOP_K, min_score=MIN_SCORE, con=None, qvec=None):
                 break
             total += len(sn) + len(label) + 20
             out.append({"id": doc_id, "kind": kind, "label": label, "score": round(score, 3), "snippet": sn})
+    if own:
+        con.close()
+    return out
+
+
+CHUNK = 1500
+
+def chunks_of(text, size=CHUNK):
+    return [text[i:i + size] for i in range(0, len(text), size)] if size else [text]
+
+
+def merge_chunked(chunks, top_k=TOP_K, min_score=MIN_SCORE, qvecs=None, con=None):
+    """Один запрос на кусок: embedding видит только первые ~512 токена, и устройства из
+    хвоста длинного текста без кусков не находятся никогда. Слитый результат — лучший hit
+    по каждому устройству.
+
+    Бюджет MAX_OUT_CHARS применяется к слитому выводу, а не к каждому куску: раньше при
+    трёх кусках вывод мог быть втрое больше обещанных 2500 символов — лимит был на кусок.
+    """
+    merged = {}
+    for i, c in enumerate(chunks):
+        for r in search(c, top_k=top_k, min_score=min_score, con=con,
+                        qvec=(qvecs[i] if qvecs else None)):
+            key = (r["kind"], r["label"])
+            if key not in merged or r["score"] > merged[key]["score"]:
+                merged[key] = dict(r)
+                merged[key]["chunk"] = i + 1
+    ranked = sorted(merged.values(), key=lambda r: -r["score"])
+    out, total = [], 0
+    for r in ranked:
+        if len(out) >= top_k:
+            break
+        cost = len(r["snippet"]) + len(r["label"]) + 20
+        if total + cost > MAX_OUT_CHARS:
+            break
+        total += cost
+        out.append(r)
     return out

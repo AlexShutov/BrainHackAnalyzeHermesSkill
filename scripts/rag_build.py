@@ -13,6 +13,7 @@ Run once at install; rebuild only when the corpus changes.
 import glob, json, os, re, subprocess, sys, time
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import rag_core as R
+from util import load_json, read_lines, read_text
 
 FB2 = sorted(glob.glob(os.path.join(R.PSY, "*.fb2")))
 JSONL = sorted(glob.glob(os.path.join(R.PSY, "books", "*.jsonl")))
@@ -40,7 +41,7 @@ def fb2_chunks(path):
     if not os.path.exists(path):
         return []
     tag = re.split(r"\s+-\s+", os.path.basename(path))[0].strip()
-    d = open(path, encoding="utf-8", errors="replace").read()
+    d = read_text(path)
     # section title per paragraph: walk the XML in order
     cur_section = ""
     out = []
@@ -57,7 +58,7 @@ def fb2_chunks(path):
 
 def jsonl_chunks(path):
     out = []
-    for line in open(path, encoding="utf-8"):
+    for line in read_lines(path):
         d = json.loads(line)
         if len(d.get("text", "")) >= 40:
             out.append((d.get("section") or "—", d["text"]))
@@ -127,12 +128,12 @@ def np_bytes(v):
 
 def main():
     os.makedirs(os.path.join(R.PSY, "rag"), exist_ok=True)
-    con = R.open_db()
+    con = R.open_db(readonly=False)   # путь построения пишет — read-only connect здесь невозможен
     con.execute("DELETE FROM docs"); con.execute("DELETE FROM vec")
     devices = []
-    for name, dev in enumerate(json.load(open(R.DEVICES, encoding="utf-8"))["devices"]):
+    for name, dev in enumerate(load_json(R.DEVICES)["devices"]):
         label = dev["name"]
-        text = f"{dev['family']}: {dev['definition']}. Формулировка: {dev.get('formula') or json.load(open(R.DEVICES, encoding='utf-8'))['formula']}. Пример: {dev['example']} (источник: {dev['source']})"
+        text = f"{dev['family']}: {dev['definition']}. Формулировка: {dev.get('formula') or load_json(R.DEVICES)['formula']}. Пример: {dev['example']} (источник: {dev['source']})"
         devices.append(("device", label, text))
     chunks = book_chunks()
     docs = devices + [("chunk", s, t) for s, t in chunks]

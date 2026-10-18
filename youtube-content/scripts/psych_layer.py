@@ -15,6 +15,8 @@ Usage:
   python3 psych_layer.py --file transcript.txt
 """
 import argparse, json, os, re, subprocess, sys
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "scripts"))
+from util import read_text
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 SKILL_ROOT = os.path.abspath(os.path.join(HERE, "..", ".."))
@@ -137,7 +139,7 @@ def main():
     ap.add_argument("--no-gate", action="store_true",
                     help="не гейтить классификатор слоем маркеров (для сверки цифр)")
     a = ap.parse_args()
-    text = open(a.file, encoding="utf-8").read() if a.file else sys.stdin.read()
+    text = read_text(a.file) if a.file else sys.stdin.read()
     text = (text or "").strip()
     if not text:
         print(json.dumps({"status": "empty", "reason": "пустой транскрипт"}, ensure_ascii=False))

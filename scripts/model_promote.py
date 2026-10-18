@@ -5,6 +5,7 @@ The update worker only marks the state as ready; the model in use keeps serving
 until this script is run. Refuses to promote an unverified or failed update.
 """
 import json, os, shutil, sys
+from util import load_json, read_bytes, read_lines
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 SKILL = os.path.dirname(HERE)
@@ -13,7 +14,7 @@ STATE = os.path.join(MODELS, "update_state.json")
 
 def main():
     try:
-        st = json.load(open(STATE, encoding="utf-8"))
+        st = load_json(STATE)
     except Exception:
         print("нет состояния обновления — сначала run model_update_check.py", file=sys.stderr)
         return 1
@@ -37,8 +38,8 @@ def main():
             return 1
     else:
         import hashlib
-        h_new = hashlib.sha256(open(new_thr, "rb").read()).hexdigest()
-        h_live = hashlib.sha256(open(live_thr, "rb").read()).hexdigest() if os.path.exists(live_thr) else ""
+        h_new = hashlib.sha256(read_bytes(new_thr)).hexdigest()
+        h_live = hashlib.sha256(read_bytes(live_thr)).hexdigest() if os.path.exists(live_thr) else ""
         if h_new == h_live and not force:
             print("пороги кандидата идентичны порогам живой модели — это пороги другой модели "
                   "(или --force)", file=sys.stderr)
@@ -46,7 +47,7 @@ def main():
         try:
             import numpy as np
             thr = np.load(new_thr)
-            labels = [l.strip() for l in open(os.path.join(staging, "labels.txt"), encoding="utf-8") if l.strip()]
+            labels = [l.strip() for l in read_lines(os.path.join(staging, "labels.txt"))]
             if len(thr) != len(labels):
                 print(f"порогов {len(thr)}, меток {len(labels)} — не совпадает", file=sys.stderr)
                 return 1

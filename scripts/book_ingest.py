@@ -12,6 +12,7 @@ Usage:
   python3 book_ingest.py status          # что уже в corpus
 """
 import argparse, json, os, re, subprocess, sys, zipfile
+from util import read_lines, read_text
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 BOOKS = os.path.join(os.path.dirname(HERE), "psychology", "books")
@@ -140,13 +141,13 @@ def doc_or_txt_lines(path):
         src = out
     else:
         src = path
-    return clean_lines(open(src, encoding="utf-8", errors="replace").read().split("\n"))
+    return clean_lines(read_text(src).split("\n"))
 
 
 def fb2_pages(path):
     """FB2: one page of paragraphs, section titles as '### ' headings."""
     import re as _re
-    d = open(path, encoding="utf-8", errors="replace").read()
+    d = read_text(path)
     cur, lines = "", []
     for m in _re.finditer(r"<section[^>]*>\s*<title>(.*?)</title>|<p>(.*?)</p>", d, _re.S):
         if m.group(1):
@@ -181,7 +182,7 @@ def ingest(path, source, out_path):
             fh.write(json.dumps({"section": sec, "text": para}, ensure_ascii=False) + "\n")
             n += 1
     secs = {}
-    for line in open(out_path, encoding="utf-8"):
+    for line in read_lines(out_path):
         secs[json.loads(line)["section"]] = secs.get(json.loads(line)["section"], 0) + 1
     print(f"paragraphs: {n} -> {out_path}")
     for k, v in list(secs.items())[:12]:
@@ -190,7 +191,7 @@ def ingest(path, source, out_path):
 
 def status():
     for f in sorted(os.listdir(BOOKS)) if os.path.isdir(BOOKS) else []:
-        n = sum(1 for _ in open(os.path.join(BOOKS, f), encoding="utf-8"))
+        n = len(read_lines(os.path.join(BOOKS, f)))
         print(f"  {n:5d}  {f}")
 
 

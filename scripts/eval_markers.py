@@ -12,10 +12,11 @@ Usage: python3 eval_markers.py [--json]
 import json, os, sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import markers as M
+from util import load_json
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-EVAL = json.load(open(os.path.join(HERE, "..", "psychology", "eval_set.json"), encoding="utf-8"))
-DEVICES = json.load(open(os.path.join(HERE, "..", "psychology", "devices.json"), encoding="utf-8"))["devices"]
+EVAL = load_json(os.path.join(HERE, "..", "psychology", "eval_set.json"))
+DEVICES = load_json(os.path.join(HERE, "..", "psychology", "devices.json"))["devices"]
 
 # семейства берутся из devices.json, а не из жёсткого списка: прежний список
 # содержал «логические», которого в devices.json нет, и не содержал «фокусы языка

@@ -6,6 +6,7 @@ Run by model_update_check.py; safe to run manually as well.
 """
 import json, os, subprocess, sys, datetime
 import numpy as np
+from util import load_json, read_lines
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 SKILL = os.path.dirname(HERE)
@@ -32,7 +33,7 @@ def model_files(base):
     """Своя комплектация модели: labels и пороги берутся из её же каталога."""
     labels_path = os.path.join(base, "labels.txt")
     thr_path = os.path.join(base, "thresholds.npy")
-    labels = [l.strip() for l in open(labels_path, encoding="utf-8") if l.strip()]
+    labels = [l.strip() for l in read_lines(labels_path)]
     thr = None
     if os.path.exists(thr_path):
         thr = np.load(thr_path)
@@ -50,7 +51,7 @@ def labels_of(session, tokenizer, text, labels, thr):
     return {labels[i] for i in range(len(p)) if p[i] >= cut[i]}
 
 def main():
-    st = json.load(open(STATE, encoding="utf-8"))
+    st = load_json(STATE)
     cand = st["candidate"]
     os.makedirs(STAGING, exist_ok=True)
     r = subprocess.run([sys.executable, os.path.join(HERE, "model_setup.py"),

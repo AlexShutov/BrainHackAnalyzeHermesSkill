@@ -20,14 +20,27 @@ import onnxruntime as ort
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 import markers  # каноническое определение абзаца для всех слоёв
+from util import load_json, read_lines
 MODELS = os.path.join(os.path.dirname(HERE), "psychology", "models")
 ONNX = os.path.join(MODELS, "classifier_int8.onnx")
 TOKENIZER = os.path.join(MODELS, "tokenizer.json")
 STATE = os.path.join(MODELS, "update_state.json")
-LABELS = [l.strip() for l in open(os.path.join(MODELS, "labels.txt"), encoding="utf-8") if l.strip()]
+LABELS = [l.strip() for l in read_lines(os.path.join(MODELS, "labels.txt"))]
 THRESH = np.load(os.path.join(MODELS, "thresholds.npy"))
-TAXONOMY = json.load(open(os.path.join(os.path.dirname(HERE), "psychology", "taxonomy_map.json"), encoding="utf-8"))["labels"]
+with open(os.path.join(os.path.dirname(HERE), "psychology", "taxonomy_map.json"), encoding="utf-8") as _f:
+    TAXONOMY = json.load(_f)["labels"]
 MAX_TOKENS = 256
+# Куски перекрываются: приём, начавшийся в последних строках куска и закончившийся в
+# начале следующего, терялся на стыке — модель видит только окно 256 токенов.
+OVERLAP = 32
+
+def chunk_starts(n_tokens):
+    """Начала кусков с перекрытием. Без перекрытия шаг = MAX_TOKENS, и приём на стыке
+    двух кусков не попадает ни в одно окно."""
+    if n_tokens <= MAX_TOKENS:
+        return [0]
+    step = MAX_TOKENS - OVERLAP
+    return list(range(0, n_tokens, step))
 
 _sess = None
 _tok = None
@@ -58,12 +71,12 @@ def classify(text, min_conf=None):
     tok = tokenizer()
     enc = tok.encode(text, add_special_tokens=True)
     ids_all, mask_all = enc.ids, enc.attention_mask
-    chunks = [ids_all[:MAX_TOKENS]] if len(ids_all) <= MAX_TOKENS else \
-             [ids_all[i:i + MAX_TOKENS] for i in range(0, len(ids_all), MAX_TOKENS)]
     agg = {}
-    for ci, chunk in enumerate(chunks, 1):
-        # attention_mask берётся по фактической длине куска (у хвостового куска она короче)
-        m = mask_all[:len(chunk)] if len(chunk) == MAX_TOKENS else [1] * len(chunk)
+    for ci, i in enumerate(chunk_starts(len(ids_all)), 1):
+        chunk = ids_all[i:i + MAX_TOKENS]
+        # attention_mask — по фактическому срезу (у хвостового куска он короче), а не
+        # с начала текста: при перекрытии кусок начинается не с нуля
+        m = mask_all[i:i + len(chunk)]
         logits = session().run(None, {"input_ids": np.array([chunk], dtype=np.int64),
                                       "attention_mask": np.array([m], dtype=np.int64)})[0][0]
         p = 1 / (1 + np.exp(-logits))
@@ -132,12 +145,12 @@ def main():
     if "--json" in sys.argv:
         upd = None
         try:
-            upd = json.load(open(STATE, encoding="utf-8"))
+            upd = load_json(STATE)
         except Exception:
             upd = None
         ver = None
         try:
-            ver = json.load(open(os.path.join(MODELS, "model_version.json"), encoding="utf-8"))
+            ver = load_json(os.path.join(MODELS, "model_version.json"))
         except Exception:
             ver = None
         print(json.dumps({"model_load_ms": load_ms, "call_ms": call_ms,

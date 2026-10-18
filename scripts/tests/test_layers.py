@@ -197,20 +197,31 @@ class TestOpenBugs(unittest.TestCase):
         self.assertEqual(share_chars, 0.0, "amb не должен входить в долю не-русского")
 
     def test_side_end_map_rules_are_reachable(self):
-        """Правило: правило END_MAP должно быть достижимо классом слов."""
+        """Правило END_MAP должно быть достижимо фактическим классом слов."""
+        n = int(re.search(r"\{(\d+),\}", side.SIDE_CLASS).group(1))
         for src, _ in side.END_MAP:
-            self.assertGreaterEqual(len(src), 3, f"правило «{src}» недостижимо при классе {{3,}}")
+            self.assertGreaterEqual(len(src), n, f"правило «{src}» недостижимо при классе {{{n},}}")
+        self.assertEqual(side.to_ru("манипуляцыя"), "манипуляция",
+                         "правило должно применяться на живом слове")
 
     def test_side_share_has_a_threshold(self):
         self.assertTrue(hasattr(side, "SIDE_THRESHOLD"),
                         "docstring обещает «≥ порога», порога в коде нет")
 
     def test_side_share_and_ukr_detect_agree_on_short_fragment(self):
+        """Два слоя совпадают в классе, а не в имени языка: если боковой слой (графика)
+        видит, что фрагмент весь на мове, морфология не называет его русским. Конкретный
+        язык морфология решает только по решающей букве — общая 'і' язык не решает,
+        поэтому на «маніпуляцыя» вердикт 'amb', а не 'uk'."""
+        thr = side.SIDE_THRESHOLD
         frag = "маніпуляцыя"
-        thr = getattr(side, "SIDE_THRESHOLD", None)
-        self.assertIsNotNone(thr, "порога в коде нет — сравнивать не с чем")
-        self.assertEqual(ukr.lang_of(frag), ("ru" if side.side_share(frag) < thr else "uk"),
-                         "два слоя дают разные вердикты на одном фрагменте")
+        self.assertGreaterEqual(side.side_share(frag), thr)
+        self.assertNotEqual(ukr.lang_of(frag), "ru",
+                            "боковой слой видит мову, морфология называет её русским")
+        frag2 = "манипуляция"
+        self.assertLess(side.side_share(frag2), thr)
+        self.assertEqual(ukr.lang_of(frag2), "ru",
+                         "ниже порога — это вставка, а не язык текста")
 
     def test_status_post_guard_length_and_flood(self):
         src = read(os.path.join(YT, "status_post.py"))
@@ -218,9 +229,26 @@ class TestOpenBugs(unittest.TestCase):
         self.assertIn("HTTPError", src, "нет обработки 429/сетевой ошибки")
 
     def test_tie_order_is_one_for_both_paths(self):
-        """Один лексикон — один порядок ничьи."""
+        """Один лексикон — один порядок ничьи. Проверка поведения, а не строки в файле:
+        telegram-путь не держит свой словарь и обязан совпадать с comment_sentiment."""
+        if tele is None:
+            self.skipTest("telethon не установлен")
         src = read(os.path.join(YT, "telegram_comments.py"))
-        self.assertIn("TIE_ORDER", src, "telegram-путь решает ничью по порядку словаря")
+        self.assertIn("from comment_sentiment import", src,
+                      "telegram-путь держит свой лексикон вместо общего")
+        text = "злой и плохо"                      # ничья: злость и недовольство по одному
+        lex = comment_sentiment.classify(text)[0]
+        self.assertEqual(lex, "злость", "ничья в classify решается по TIE_ORDER")
+        comments = [{"id": "R1", "reply_to": None, "text": text},
+                    {"id": "R1.b1", "reply_to": "R1", "text": text}]
+        block = tele.sentiment_block(comments)
+        rows = [{"id": c["id"], "parent": c["reply_to"] or "root", "text": c["text"],
+                 "author": None, "cat": comment_sentiment.classify(c["text"])[0]}
+                for c in comments]
+        th, by = comment_sentiment.build_threads(rows)
+        lex_dom = comment_sentiment.thread_homogeneity(th, by)[0][0]["dominant"]
+        self.assertEqual(block["threads"][0]["dominant"], lex_dom,
+                         "ничья в треде на telegram-пути решается не по TIE_ORDER")
 
     def test_neural_labels_have_no_none_and_known_models(self):
         src = read(os.path.join(YT, "neural_pass.py"))
@@ -268,18 +296,28 @@ class TestOpenBugs(unittest.TestCase):
             self.assertFalse(dups, f"{cat}: дубликат {dups} — одно и то же слово считается дважды")
 
     def test_stop_list_is_effective_for_repetition(self):
-        """Стоп-лист работает только если слово может быть выдано regex [а-яё]{4,}."""
-        stop = set("и в не на что как это то он она они мы вы я к с у о для по из но а также же ну да уж вот".split())
-        unreachable = [w for w in stop if len(w) < 4]
+        """Стоп-лист работает только если слово может быть выдано классом значимых слов —
+        проверяется по фактическим константам markers, а не по копии списка в тесте."""
+        n = int(re.search(r"\{(\d+),\}", markers.SIGNIFICANT_CLASS).group(1))
+        unreachable = [w for w in markers.STOP if len(w) < n]
         self.assertFalse(unreachable,
-                         f"{len(unreachable)} из {len(stop)} стоп-слов недостижимы при {{4,}} — "
-                         "служебные слова типа «очень», «просто» считаются значимыми")
+                         f"{len(unreachable)} из {len(markers.STOP)} стоп-слов недостижимы при {{{n},}}")
+        for w in ("очень", "просто", "также", "именно"):
+            self.assertIn(w, markers.STOP,
+                          f"«{w}» — служебное слово достижимого класса, которого в списке нет")
 
     def test_ambig_and_weak_are_used_in_the_decision(self):
         """docstring: неоднозначные считаются вместе с маркером; омонимы усиливают решённый язык."""
         body = re.search(r"def lang_of.*?(?=\ndef )", read(os.path.join(YT, "ukr_detect.py")), re.S).group()
         self.assertIn("AMBIG", body, "AMBIG определён, но в решении не участвует: «це ми бачили де так» → ru")
-        self.assertIn("weak_be", body.split("return")[1:], "WEAK собирается, но никогда не влияет на вердикт")
+        parts = body.split("return")[1:]
+        self.assertTrue(any("weak_be" in p for p in parts),
+                        "WEAK собирается, но никогда не влияет на вердикт")
+        # поведение: неоднозначные без маркера — не русский; одна омонимичная форма язык не решает
+        self.assertEqual(ukr.lang_of("це ми бачили де так"), "amb",
+                         "неоднозначные слова без маркера уходили в ru")
+        self.assertEqual(ukr.lang_of("па был в доме"), "ru",
+                         "одна омонимичная форма не должна решать язык")
 
     def test_hf_language_filter_accepts_prefixed_tags(self):
         src = read(os.path.join(SCRIPTS, "model_update_check.py"))
@@ -294,6 +332,51 @@ class TestOpenBugs(unittest.TestCase):
         src = read(os.path.join(SCRIPTS, "rag_mcp.py"))
         self.assertIn("chunk", src, "MCP-путь (основной по правилу навыка) не делит длинный запрос: "
                                     "embedding видит только первые ~512 токена")
+
+    # --- новое, найденное этим проходом (тесты добавлены вместе с фиксом) ------
+    def test_classifier_chunks_overlap(self):
+        """Приём на стыке двух окон 256 токенов терялся — куски обязаны перекрываться."""
+        starts = classifier.chunk_starts(600)
+        self.assertGreater(len(starts), 1)
+        self.assertTrue(all(b - a < classifier.MAX_TOKENS for a, b in zip(starts, starts[1:])),
+                        "шаг равен окну без перекрытия: приём на стыке не попадает ни в одно окно")
+
+    def test_min_ev_branch_is_live(self):
+        """min_ev обязан что-то решать: при min_ev=2 одного доказательства мало."""
+        frag = "він пояснив предмет быстро"
+        self.assertEqual(ukr.lang_of(frag), "uk")
+        self.assertEqual(ukr.lang_of(frag, min_ev=2), "amb",
+                         "ветка min_ev мертва: порог никогда не применяется")
+
+    def test_plugin_guard_covers_all_markers(self):
+        """Guard обязан покрывать все четыре блока, не только первый."""
+        p = load_plugin()
+        p.retrieve = lambda t: [{"kind": "device", "label": "X", "score": 0.5, "snippet": "y"}]
+        p.marker_hits = lambda t: None
+        p.classifier_hits = lambda t, h: None
+        p.version_check = lambda s: None
+        class Ev:
+            def __init__(self, text):
+                self.text, self.internal = text, False
+        already = "абзац один\n\nабзац два" + p.MARK2 + "\n[структурные маркеры] / повтор: [x] y"
+        self.assertIsNone(p.callback(event=Ev(already)),
+                          "сообщение, которое уже содержит блок маркеров, переписывается повторно")
+        self.assertIsNotNone(p.callback(event=Ev("абзац один\n\nабзац два")),
+                            "контроль: без маркера переписывание работает")
+
+    def test_readonly_db_and_closed_files(self):
+        """Запросная часть читает БД в режиме ro (гейтвей держит write-лок) и не оставляет
+        открытых дескрипторов."""
+        src = read(os.path.join(SCRIPTS, "rag_core.py"))
+        self.assertIn("mode=ro", src, "запросная часть открывает БД на запись")
+        for f in sorted(os.listdir(SCRIPTS)):
+            if f.endswith(".py") and f != "util.py":   # util.py — сам помощник, в его docstring шаблон упомянут намеренно
+                s = read(os.path.join(SCRIPTS, f))
+                self.assertNotIn("json.load(open(", s, f"{f}: незакрытый open()")
+
+    def test_status_post_argv_guard(self):
+        src = read(os.path.join(YT, "status_post.py"))
+        self.assertIn("len(sys.argv)", src, "нет проверки аргументов — IndexError вместо usage")
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

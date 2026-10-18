@@ -9,6 +9,8 @@ the video has an auto-generated or manual caption track. Many Rutube videos have
 then say so plainly, never fabricate a transcript.
 """
 import argparse, os, re, subprocess, sys
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "scripts"))
+from util import read_text
 
 UA = {"User-Agent": "Mozilla/5.0"}
 
@@ -56,7 +58,7 @@ def main():
         sys.exit(1)
 
     out = []
-    for block in open(path, encoding="utf-8").read().split("\n\n"):
+    for block in read_text(path).split("\n\n"):
         lines = [l for l in block.splitlines() if l.strip()]
         if len(lines) < 2 or "-->" not in lines[1]:
             continue

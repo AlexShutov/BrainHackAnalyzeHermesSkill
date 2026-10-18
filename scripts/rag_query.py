@@ -38,16 +38,7 @@ def main():
     embed_ms = (time.time() - t0) * 1000
 
     t1 = time.time()
-    merged = {}
-    for i, c in enumerate(chunks):
-        res = R.search(c, top_k=a.top_k, min_score=a.min_score,
-                       qvec=(qvecs[i] if qvecs else None))
-        for r in res:
-            key = (r["kind"], r["label"])
-            if key not in merged or r["score"] > merged[key]["score"]:
-                merged[key] = dict(r)
-                merged[key]["chunk"] = i + 1
-    out = sorted(merged.values(), key=lambda r: -r["score"])[:a.top_k]
+    out = R.merge_chunked(chunks, top_k=a.top_k, min_score=a.min_score, qvecs=qvecs)
     print(json.dumps({"query": a.query[:120], "chunks": len(chunks),
                       "embed_ms": round(embed_ms, 1),
                       "total_ms": round((time.time() - t1) * 1000, 1), "results": out},

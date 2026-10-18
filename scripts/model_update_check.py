@@ -13,6 +13,7 @@ Usage:
 Exit 0 always (the check must not break the analysis path).
 """
 import argparse, json, os, subprocess, sys, datetime
+from util import load_json
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 SKILL = os.path.dirname(HERE)
@@ -22,13 +23,13 @@ STAGING = os.path.join(MODELS, "staging")
 
 def load_version():
     try:
-        return json.load(open(os.path.join(MODELS, "model_version.json"), encoding="utf-8"))
+        return load_json(os.path.join(MODELS, "model_version.json"))
     except Exception:
         return None
 
 def load_state():
     try:
-        return json.load(open(STATE, encoding="utf-8"))
+        return load_json(STATE)
     except Exception:
         return None
 
@@ -91,7 +92,15 @@ def main():
     for m in found:
         if m["id"] == v["model_id"]:
             continue
-        langs = set(t for t in m.get("tags", []) if len(t) == 2)
+        # язык берём из фактических тегов hub: `language:ru` — основной формат,
+        # голый двухбуквенный тег встречается реже; прежний фильтр ловил только его
+        tags = m.get("tags") or []
+        langs = set()
+        for t in tags:
+            if t.startswith("language:"):
+                langs.add(t.split(":", 1)[1])
+            elif len(t) == 2:
+                langs.add(t)
         if "ru" not in langs:
             continue
         f1, name = best_metric(m)
@@ -109,21 +118,21 @@ def main():
     state = {"status": "needed", "reasons": reasons, "candidate": candidate,
             "in_use": {"model_id": v["model_id"], "revision": v.get("revision")},
             "marked_at": datetime.datetime.now().isoformat(timespec="seconds")}
-    save_state(state)
 
-    # background download; the runtime keeps using the old model
-    os.makedirs(STAGING, exist_ok=True)
+    # --dry-run не пишет ничего: ни состояние, ни staging-каталог. Прежде dry-run
+    # помечал обновление как нужное на диске — тестовый запуск менял состояние навыка.
     py = sys.executable
     proc = None
     if not a.dry_run:
+        save_state(state)
+        os.makedirs(STAGING, exist_ok=True)
         proc = subprocess.Popen([py, os.path.join(HERE, "model_update_run.py")],
                                 stdout=open(os.path.join(STAGING, "update.log"), "w"),
                                 stderr=subprocess.STDOUT)
-    state["status"] = "updating" if proc else "needed"
-    if proc:
+        state["status"] = "updating"
         state["pid"] = proc.pid
-    state["staging"] = STAGING
-    save_state(state)
+        state["staging"] = STAGING
+        save_state(state)
 
     if proc:
         announce = ("Начато обновление психологической модели (фон): " + "; ".join(reasons) +

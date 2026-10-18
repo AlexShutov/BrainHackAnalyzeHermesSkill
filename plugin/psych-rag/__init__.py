@@ -133,7 +133,10 @@ def callback(*args, **kwargs):
     if event is None:
         return None
     text = getattr(event, "text", "") or ""
-    if getattr(event, "internal", False) or MARK in text:
+    # Guard по всем четырём маркерам, не только по первому: пересланное сообщение,
+    # которое уже содержит блок маркеров/классификатора, иначе переписывается повторно
+    # и блок появляется дважды (или начинается рекурсия: rewrite -> новый inbound).
+    if getattr(event, "internal", False) or any(m in text for m in (MARK, MARK2, MARK3, MARK4)):
         return None
     paras = paragraphs(text)
     if len(paras) < MIN_PARAS or len(paras) > MAX_PARAS or len(text) > MAX_CHARS:
@@ -144,19 +147,29 @@ def callback(*args, **kwargs):
     cls = classifier_hits(text, hits)
     if not results and not hits and not cls and not notice:
         return None
-    new_text = text
+    blocks = []
     if results:
         lines = [f"[{r['kind']} · {r['label']} · {r['score']}] {r['snippet']}" for r in results]
-        new_text += MARK + str(len(lines)) + "]\n" + "\n".join(lines)
+        blocks.append(MARK + str(len(lines)) + "]\n" + "\n".join(lines))
     if hits:
         lines = [f"{h['family']} / {h['marker']}: [{h['found']}] {h['context']}" for h in hits[:12]]
-        new_text += MARK2 + "\n" + "\n".join(lines)
+        blocks.append(MARK2 + "\n" + "\n".join(lines))
     if cls:
         lines = [f"абзац {r['para']}: " + ", ".join(f"{l['ru']} ({l['p']})" for l in r["labels"])
                  for r in cls]
-        new_text += MARK3 + "\n" + "\n".join(lines)
+        blocks.append(MARK3 + "\n" + "\n".join(lines))
     if notice:
-        new_text += MARK4 + "\n" + notice.get("announcement", "")
+        blocks.append(MARK4 + "\n" + notice.get("announcement", ""))
+    # Итог не должен превышать лимит платформы: исходный текст сохраняется целиком,
+    # усекаются блоки (они — служебное добавление, а не содержание сообщения)
+    new_text = text
+    for b in blocks:
+        if len(new_text) + len(b) > MAX_CHARS:
+            room = MAX_CHARS - len(new_text)
+            if room > 0:
+                new_text += b[:room]
+            break
+        new_text += b
     return {"action": "rewrite", "text": new_text}
 
 

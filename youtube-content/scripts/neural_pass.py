@@ -21,6 +21,8 @@ torch.set_num_threads(1)
 from huggingface_hub import hf_hub_download
 from safetensors.torch import load as load_bytes
 from transformers import AutoConfig, AutoModelForSequenceClassification, AutoTokenizer
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "scripts"))
+from util import read_bytes, read_lines, write_json
 
 REPOS = {
     "emotion": "seara/rubert-base-cased-russian-emotion-detection-ru-go-emotions",
@@ -46,7 +48,7 @@ def load_no_mmap(repo):
     path = hf_hub_download(repo, "model.safetensors")
     cfg = AutoConfig.from_pretrained(repo)
     model = AutoModelForSequenceClassification.from_config(cfg)
-    sd = load_bytes(open(path, "rb").read())          # bytes -> RAM, no mmap
+    sd = load_bytes(read_bytes(path))          # bytes -> RAM, no mmap
     sd = {k: v for k, v in sd.items() if k != "bert.embeddings.position_ids"}
     model.load_state_dict(sd)
     # labels come from the model itself — a hardcoded list can silently disagree
@@ -55,6 +57,17 @@ def load_no_mmap(repo):
     if id2label:
         # keys may be ints (transformers) or strings (raw JSON) — accept both
         labels = [id2label.get(i) or id2label.get(str(i)) for i in range(len(id2label))]
+        if None not in labels:
+            return model.eval(), labels
+        # пропуск в id2label: модель выдаёт класс, которого в списке нет, и top-метка
+        # становится None — разбор молча теряет вердикт по этой модели
+        key = repo_key(repo)
+        if key and len(labels) == len(LABELS[key]):
+            print(f"warning: id2label содержит пропуск, использую fallback-порядок {key}",
+                  file=sys.stderr)
+            labels = LABELS[key]
+        else:
+            labels = [l if l is not None else f"class_{i}" for i, l in enumerate(labels)]
     else:
         labels = LABELS[repo_key(repo)]
     return model.eval(), labels
@@ -77,9 +90,13 @@ def main():
                     help="comma list from emotion,toxicity,sarcasm")
     a = ap.parse_args()
 
-    texts = [a.text] if a.text else [l.rstrip("\n") for l in open(a.texts) if l.strip()]
+    names = [n.strip() for n in a.models.split(",") if n.strip()]
+    unknown = [n for n in names if n not in REPOS]
+    if unknown:
+        sys.exit(f"неизвестная модель {unknown}; доступны: {', '.join(sorted(REPOS))}")
+    texts = [a.text] if a.text else [l.rstrip("\n") for l in read_lines(a.texts)]
     out = []
-    for name in a.models.split(","):
+    for name in names:
         repo = REPOS[name]
         tok = AutoTokenizer.from_pretrained(repo)
         model, labels = load_no_mmap(repo)
@@ -95,7 +112,7 @@ def main():
                             "all": {k: round(v, 3) for k, v in zip(labels, p)}})
     print(json.dumps(out, ensure_ascii=False, indent=1))
     if a.out:
-        json.dump(out, open(a.out, "w"), ensure_ascii=False, indent=1)
+        write_json(a.out, out)
 
 
 if __name__ == "__main__":
