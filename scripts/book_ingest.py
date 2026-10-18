@@ -143,12 +143,33 @@ def doc_or_txt_lines(path):
     return clean_lines(open(src, encoding="utf-8", errors="replace").read().split("\n"))
 
 
+def fb2_pages(path):
+    """FB2: one page of paragraphs, section titles as '### ' headings."""
+    import re as _re
+    d = open(path, encoding="utf-8", errors="replace").read()
+    cur, lines = "", []
+    for m in _re.finditer(r"<section[^>]*>\s*<title>(.*?)</title>|<p>(.*?)</p>", d, _re.S):
+        if m.group(1):
+            cur = _re.sub(r"\s+", " ", _re.sub(r"<[^>]+>", "", m.group(1))).strip()
+            continue
+        p = _re.sub(r"\s+", " ", _re.sub(r"<[^>]+>", " ", m.group(2))).strip()
+        if len(p) < 40:
+            continue
+        if cur:
+            lines.append(f"### {cur}")
+            cur = ""
+        lines.append(p)
+    return [lines] if lines else []
+
+
 def ingest(path, source, out_path):
     ext = os.path.splitext(path)[1].lower()
     if ext == ".pdf":
         pages = pdf_pages(path)
     elif ext == ".epub":
         pages = epub_pages(path)
+    elif ext == ".fb2":
+        pages = fb2_pages(path)
     elif ext in (".doc", ".txt"):
         pages = [doc_or_txt_lines(path)]
     else:
@@ -183,8 +204,18 @@ def main():
     if not a.path or a.path == "status":
         status()
         return
-    slug = os.path.splitext(os.path.basename(a.path))[0]
-    source = a.source or slug
+    path, slug, source = a.path, os.path.splitext(os.path.basename(a.path))[0], None
+    if a.source:
+        source = a.source
+    if slug.startswith("reference_") and path.endswith(".enc"):
+        # encrypted corpus file: books_secure knows the real name and decrypts
+        sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+        import books_secure as BS
+        n = int(slug[len("reference_"):])  # slug has no .enc: splitext stripped it
+        source = source or os.path.basename(BS.real_name(n))
+        a.path = BS.decrypt_to_temp(n)
+        slug = f"reference_{n}_extract"  # unique jsonl per book
+    source = source or slug
     out = a.out or os.path.join(BOOKS, slug + ".jsonl")
     ingest(a.path, source, out)
 

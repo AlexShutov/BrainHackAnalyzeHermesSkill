@@ -1,9 +1,12 @@
-# не коммитим: веса модели, индекс, кэш и книжные файлы (авторские права)
+# не коммитим: веса модели, индекс, кэш и сырые книги (в репо — только шифрованный corpus/)
 psychology/models/
 psychology/rag/
 psychology/books/
 psychology/*.fb2
 psychology/*.pdf
+psychology/*.doc
+psychology/*.epub
 psychology/*.txt
+psychology/corpus/manifest.local.json
 __pycache__/
 *.log

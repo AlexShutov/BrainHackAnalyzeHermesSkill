@@ -104,13 +104,17 @@ Requirements: CPython 3.11–3.14 (onnxruntime has no wheels for newer versions;
 supported interpreter), network access for the model download (~1.1 GB weights, ~550 MB after
 conversion), Google Chrome not needed, Telegram token only if the plugin path is used.
 `onnx` is needed at conversion time only; the runtime uses onnxruntime.
-The book is not in the repo (copyright); without it the index is built from `devices.json` only.
-
 ### Books in the corpus (knowledge base)
 
-`rag_build.py` ingests every book it finds locally: `psychology/*.fb2` (chunked by FB2
-paragraphs with section titles), `psychology/books/*.jsonl` and `psychology/*.pdf` via
-`scripts/book_ingest.py` (PDF / EPUB / .doc / .txt). The current corpus:
+The books ship **encrypted** in `psychology/corpus/reference_N.enc` (Fernet via the
+standard `cryptography` package; key + name mapping are constants in
+`scripts/books_secure.py` — this is repo obfuscation, not DRM). `rag_build.py`
+decrypts and ingests them automatically on install — no manual steps.
+
+To add your own book: drop a raw `.fb2 / .pdf / .epub / .doc / .txt` into
+`psychology/` and rebuild. New files are encrypted automatically at build/start
+(`encrypt_new_books()`), the raw file stays on disk untracked, and the encrypted
+copy joins the corpus. Current corpus:
 
 1. *Спирица Е., Пелехатый М. — «Боевое НЛП» (2020)* — FB2
 2. *Непряхин Н. — «Я манипулирую тобой» (2018)* — PDF

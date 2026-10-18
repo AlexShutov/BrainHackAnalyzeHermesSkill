@@ -10,7 +10,7 @@ document adds no new knowledge, so only non-overlapping material merges in.
 Run once at install; rebuild only when the corpus changes.
     python3 rag_build.py
 """
-import glob, json, os, re, sys, time
+import glob, json, os, re, subprocess, sys, time
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import rag_core as R
 
@@ -64,11 +64,59 @@ def jsonl_chunks(path):
     return pack(out, "")
 
 
+def raw_books():
+    """Book sources to ingest: raw files in psychology/ + encrypted corpus/reference_N.enc."""
+    out = []
+    # .fb2 is parsed directly by fb2_chunks below — do not double-ingest
+    for ext in (".pdf", ".epub", ".doc", ".txt"):
+        out += sorted(glob.glob(os.path.join(R.PSY, "*" + ext)))
+    out = [p for p in out if not p.endswith(".ingest.txt")]
+    try:
+        sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+        import books_secure as BS
+        import unicodedata as _ud
+        _stem = lambda p_: _ud.normalize("NFC", os.path.splitext(os.path.basename(p_))[0])
+        shipped = {_stem(BS.real_name(int(n))) for n in BS._manifest()}
+        out = [p for p in out if _stem(p) not in shipped]
+        out += BS.all_references()
+    except ImportError:
+        pass  # corpus module absent -> raw files only
+    return out
+
+
+def ensure_jsonl():
+    """Fresh clones carry encrypted books but not the git-ignored jsonl extracts —
+    encrypt any newly dropped raw books, then run book_ingest.py for every corpus
+    book that has no extract yet, so the books reach the index."""
+    try:
+        import books_secure as BS
+        n = BS.encrypt_new_books()
+        if n:
+            print(f"  encrypted {n} new book(s)")
+    except ImportError:
+        pass
+    if not raw_books():
+        return
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    import book_ingest as BI
+    os.makedirs(BI.BOOKS, exist_ok=True)
+    for p in raw_books():
+        slug = os.path.splitext(os.path.basename(p))[0]
+        out = os.path.join(BI.BOOKS, slug + ".jsonl")
+        if os.path.exists(out) and os.path.getmtime(out) >= os.path.getmtime(p):
+            continue
+        print(f"  ingesting: {slug}")
+        subprocess.run([sys.executable, os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                        "book_ingest.py"), p], check=True)
+
+
 def book_chunks():
+    ensure_jsonl()
+    # re-glob AFTER ensure_jsonl: fresh clones have no jsonl at import time
     chunks = []
     for p in FB2:
         chunks += fb2_chunks(p)
-    for p in JSONL:
+    for p in sorted(glob.glob(os.path.join(R.PSY, "books", "*.jsonl"))):
         chunks += jsonl_chunks(p)
     return chunks
 
