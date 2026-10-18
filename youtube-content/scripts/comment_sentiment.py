@@ -25,14 +25,18 @@ ANGER = [
 ]
 JOY = [
     "радост", "рад ", "рада", "рады", "спасибо", "благодар", "круто",
-    "крутой", "классн", "класс", "отлично", "отличн", "здорово", "люблю",
+    "крутой", "классн", "отлично", "отличн", "здорово", "люблю",
     "любим", "счасть", "счастл", "молодец", "молодцы", "красота", "красиво",
     "супер", "нравится", "нравились", "приятно", "приятн", "успех",
     "успешн", "поздравляю", "ура", "восторг", "восхищ", "лучший", "лучшие",
+    # "класс" убран: цепляется как подстрока в "классический"/"классификация"
     "прогресс", "огонь",
 ]
 DISCONTENT = [
-    "недоволь", "не нравится", "не нравятся", "не понравился", "плохо",
+    # "не нравится"/"не нравятся"/"не понравился" убраны: их базовая форма
+    # ("нравится") стоит в JOY, и отрицание обрабатывается правилом flip —
+    # иначе одна и та же фраза считается дважды
+    "недоволь", "плохо",
     "плохой", "плохие", "плохое", "хуже", "несправедлив", "разочаров",
     "не согласен", "не согласна", "не согласны", "фу ", "скучн", "слабо",
     "хренов", "ужасн", "кошмар", "проблем", "загибается", "не надо",
@@ -46,16 +50,33 @@ DISCONTENT = [
 ]
 CATS = {"злость": ANGER, "радость": JOY, "недовольство": DISCONTENT}
 
+NEG = ("не", "ни")          # отрицание переворачивает позитивную категорию
+SHORT_WHOLE = 3             # короткие стемы (ура, бык, фу) ловятся только как целое слово
+TIE_ORDER = ["злость", "недовольство", "радость"]   # детерминированный порядок при ничьей
+
+def _pat(stem):
+    s = re.escape(stem.strip())
+    if " " in stem or len(stem.strip()) <= SHORT_WHOLE:
+        return re.compile(r"(?<!\w)" + s + r"(?!\w)")   # целое слово / фраза
+    return re.compile(r"(?<!\w)" + s)                   # стем-префикс (ловит флексии)
+
+_PATTERNS = {stem: _pat(stem) for stems in CATS.values() for stem in stems}
+
 def classify(text):
     t = text.lower()
     scores = {}
     for cat, stems in CATS.items():
-        s = sum(1 for w in stems if w in t)
-        if s:
-            scores[cat] = s
+        for stem in stems:
+            for m in _PATTERNS[stem].finditer(t):
+                eff = cat
+                if cat in ("злость", "радость"):
+                    before = t[max(0, m.start() - 3):m.start()]
+                    if before.startswith("не ") or before.startswith("ни "):
+                        eff = "недовольство"   # «не лучший», «не радость» — не позитив
+                scores[eff] = scores.get(eff, 0) + 1
     if not scores:
         return "нейтрально", False
-    best = max(scores, key=scores.get)
+    best = sorted(scores.items(), key=lambda kv: (-kv[1], TIE_ORDER.index(kv[0])))[0][0]
     # emotional intensity: shouty caps
     letters = [c for c in text if c.isalpha()]
     shouty = letters and sum(1 for c in letters if c.isupper()) / len(letters) > 0.4

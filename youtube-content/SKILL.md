@@ -135,6 +135,8 @@ Emoji mapping for comments (one tag per comment): 💸 — продающий/м
 
 Legacy lexicon path (`scripts/comment_sentiment.py`) remains for cross-checks and for Rutube/Telegram comments where the neural models are not run; when both are available, deliver the neural numbers and note the difference.
 
+Lexicon matching semantics (fixed 2026-10-18, was substring-only): stems match at word start, short stems (≤3 chars: `ура`, `бык`, `фу`) only as whole words — otherwise `ураган` reads as радость and `классический` as радость (`класс` was removed from the lexicon for this reason). Negation flips a positive-category hit: `не лучший`, `не радость`, `не злой` → недовольство, not радость/злость. Negated forms whose base stem lives in JOY/ANGER are NOT listed in DISCONTENT (double counting). Tie between categories resolves to the negative reading (order: злость → недовольство → радость), deterministically.
+
 ## Ukrainian / Belarusian language pass (правило пользователя, 2026-10-18)
 
 Trigger: any analysis — comments and transcript are checked for «мова» (both Ukrainian and Belarusian are called мова).
