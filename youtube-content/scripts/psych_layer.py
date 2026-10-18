@@ -34,6 +34,75 @@ def call(script, args, timeout):
         return None
 
 
+# --- subtype routing: which ⚫ pair applies to a flagged paragraph ---
+
+# Все 23 метки SemEval-2023 распределены явно; NLP-классов у классификатора нет —
+# 🔪🧠 определяется маркерным слоем (Левинсон, эпистемическая дистанция) и RAG (внушение/Дилтс).
+LABEL_SUBTYPE = {
+    # 📢🧠 пропаганда — массовый нарратив, мобилизационная риторика
+    "Flag_Waving": "📢🧠",
+    "Appeal_to_Fear-Prejudice": "📢🧠",
+    "Guilt_by_Association": "📢🧠",
+    "Appeal_to_Hypocrisy": "📢🧠",
+    "Whataboutism": "📢🧠",
+    "Slogans": "📢🧠",
+    "Appeal_to_Time": "📢🧠",
+    "Appeal_to_Popularity": "📢🧠",
+    # 🎭🧠 психологические манипуляции — логические и эмоциональные приёмы
+    "Loaded_Language": "🎭🧠",
+    "Name_Calling-Labeling": "🎭🧠",
+    "Doubt": "🎭🧠",
+    "Exaggeration-Minimisation": "🎭🧠",
+    "Causal_Oversimplification": "🎭🧠",
+    "Consequential_Oversimplification": "🎭🧠",
+    "False_Dilemma-No_Choice": "🎭🧠",
+    "Straw_Man": "🎭🧠",
+    "Red_Herring": "🎭🧠",
+    "Obfuscation-Vagueness-Confusion": "🎭🧠",
+    "Repetition": "🎭🧠",
+    "Conversation_Killer": "🎭🧠",
+    "Appeal_to_Authority": "🎭🧠",
+    "Appeal_to_Values": "🎭🧠",
+    "Questioning_the_Reputation": "🎭🧠",
+}
+NLP_FAMILY_MARKS = (  # marker-layer families = НЛП-инструментарий (Левинсон, эпистемическая дистанция, НЛП-пакеты)
+    "пресуппозици", "номинализаци", "номinalизация", "эпистемическ", "нлп",
+)
+
+
+def marker_families_in(para_text, markers):
+    """Marker families whose found-word occurs in this paragraph's text."""
+    t = (para_text or "").lower()
+    return {h.get("family", "") for h in markers if h.get("found", "").lower() in t}
+
+
+def attach_subtypes(classification, markers):
+    """subtype per paragraph: classifier labels + marker families bound to the paragraph text.
+
+    Primary = первая по приоритету (📢🧠 пропаганда → 🎭🧠 манипуляция → 🔪🧠 НЛП);
+    subtype_extra = второй тип, если в абзаце смешаны (например, метка классификатора + НЛП-маркеры).
+    """
+    order = ["📢🧠", "🎭🧠", "🔪🧠"]
+    for para in classification:
+        labels = {l.get("label") for l in para.get("labels", [])}
+        fams = marker_families_in(para.get("text", ""), markers)
+        present = []
+        for s in order:
+            if s == "📢🧠" and any(
+                    LABEL_SUBTYPE.get(l.get("label")) == "📢🧠" for l in para.get("labels", [])):
+                present.append(s)
+            elif s == "🎭🧠" and any(
+                    LABEL_SUBTYPE.get(l.get("label")) == "🎭🧠" for l in para.get("labels", [])):
+                present.append(s)
+            elif s == "🔪🧠":
+                nlp = sum(1 for f in fams if any(m in f.lower() for m in NLP_FAMILY_MARKS))
+                if nlp:
+                    present.append(s)
+        para["subtype"] = present[0] if present else None
+        para["subtype_extra"] = present[1] if len(present) > 1 else None
+    return classification
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--file", help="transcript file (default: stdin)")
@@ -59,7 +128,8 @@ def main():
         result["markers_hits"] = markers.get("hits", 0)
         result["markers"] = markers.get("markers", [])
     if classifier and classifier.get("classification"):
-        result["classification"] = classifier["classification"]
+        result["classification"] = attach_subtypes(
+            classifier["classification"], (markers or {}).get("markers", []))
     if rag and rag.get("results"):
         result["rag"] = [{"kind": r["kind"], "label": r["label"], "score": r["score"],
                           "snippet": r["snippet"]} for r in rag["results"]]
