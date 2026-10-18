@@ -122,6 +122,19 @@ Fields per comment: `author, text, likes, timestamp (unix), pinned, parent` (`pa
 
 ## Comment mood + thread homogeneity (standing algorithm)
 
+**Neural models (standing, replaces the dictionary lexicon).** Run on every analysis with the psych-rag-env interpreter (`/Users/alex/.hermes/tools/psych-rag-env/bin/python`, transformers + torch available). Always pass `truncation=True, max_length=512` — comments longer than 512 tokens crash BERT position embeddings (`RuntimeError: size of tensor a (625) must match tensor b (512)`).
+
+- `seara/rubert-base-cased-russian-emotion-detection-ru-go-emotions` — 28 multi-label emotions (anger, annoyance, disapproval, disgust, disappointment, sadness, grief, nervousness / admiration, joy, amusement, approval, love, gratitude, optimism, excitement, pride, relief, caring, desire / neutral). Test F1 ~0.79 macro on CEDR, AUC 0.93.
+- `cointegrated/rubert-tiny-toxicity` — multi-label: non-toxic, insult, obscenity, threat, dangerous (per-label ROC AUC: insult 0.991, threat 0.991, obscenity 0.988).
+- `Kostya165/rubert_tiny2_russian_emotion_sentiment` — aggression / anxiety / neutral / positive / sarcasm (sarcasm recall ~0.95). Use it for the sarcasm pass — the dictionary lexicon cannot see irony, which is why it over-reports «нейтрально».
+- Reasoning devices in comments: `scripts/classifier.py` with `min_conf` per-label thresholds from `thresholds.npy` (calibrated per label — this is the correct statistical criterion; a fixed p is only a rough proxy). Require a named device, not just loaded vocabulary: `Loaded_Language` alone is NOT a manipulation.
+
+Emoji mapping for comments (one tag per comment): 🎭🧠 / 📢🧠 — уверенный вердикт по приёму рассуждения; ☠️ — смерть/суицид (смерть техники не считается); 🤮 — сарказм (по выбору пользователя, уточняется); 🔴 — оценочный негатив без фактической базы (токсичность/оскорбление/агрессия по модели или негативная эмоция); 😊 — позитив; 🙂 — нейтрально. Приоритет: приём → ☠️ → 🤮 → 🔴 → 😊 → 🙂.
+
+**Delivery format for the comment block:** no quoted comment text — the user reads only emoji. Give the distribution over ALL comments (counts + %), then one line per thread with ≥2 comments: `EMOJI @author — X% (size N)`, where X is homogeneity over stance-bearing comments in the thread. Threads with only neutral comments are not listed individually, only counted in the distribution. State once that the classifier is a model, not a dictionary: sarcasm/irony can still be misclassified, and homogeneity measures emotional coloring, not semantic agreement.
+
+Legacy lexicon path (`scripts/comment_sentiment.py`) remains for cross-checks and for Rutube/Telegram comments where the neural models are not run; when both are available, deliver the neural numbers and note the difference.
+
 Run on every analysis (after fetching comments):
 
 ```bash
@@ -172,7 +185,7 @@ Apply to every video analysis. Format: `EMOJI [MM:SS–MM:SS] краткое о�
 
 | Tag | Category |
 |-----|----------|
-| 🔴 | Явный негатив без манипулятивного и НЛП-подтекста. Критерии: (1) фрагмент или комментарий содержит оценочную констатацию плохого состояния/качества или критику России (армия, правительство, институты власти); (2) в нём НЕТ уверенного манипулятивного/НЛП-вердикта (иначе строка маркируется только парой подтипа); (3) нет более специфичного тега (🍆, 🐷, 🦅, 🐻, 🦹, 🍏, 🟢, ⭐, 🔵, 🟣, 🟤, ☠️). 🔴 — резерв, а не дефолт: если в строке уже есть манипулятивный вердикт или специфичный тег, 🔴 не пишется. Если в видео нет ничего негативного о России, 🔴 = общий негатив, и об отсутствии России говорится один раз |
+| 🔴 | Явный оценочный негатив БЕЗ фактической базы. Критерии: (1) в фрагменте есть оценка плохого состояния/качества, выраженная оценочной лексикой (преувеличение, эмоциональная характеристика), а не конкретными цифрами или наблюдаемым фактом; (2) нет уверенного манипулятивного/НЛП-вердикта (иначе строка — только пара подтипа); (3) нет более специфичного тега. Фрагменты с реальными данными (цена, пробег, толщина слоя, механизм поломки) НЕ маркируются 🔴 — если они ещё и объясняют механизм, это ⭐, иначе тег не ставится вообще и фрагмент называется в строке «фактические фрагменты без тегов». Таймлайн не должен превращаться в непрерывную череду 🔴/🎭🧠: тег ставится только там, где приём или оценочная лексика реально есть. Критика России (армия, правительство, институты власти) остаётся 🔴 |
 | 🍆 | Явная анти-российская пропаганда — сильнейшая категория, выше простой критики; обычная критика остаётся 🔴 |
 | 🍏 | Позитив о России: прогресс России, успехи армии, победы на поле боя, другие позитивные мысли о России |
 | 🟢 | Прогресс человечества: наука, производство, роботы, ИИ, мировая инфраструктура |
@@ -186,6 +199,7 @@ Apply to every video analysis. Format: `EMOJI [MM:SS–MM:SS] краткое о�
 | 🦹 | Инфоцыганщина в экономическом контенте: тезисы, противоречащие экономической теории (доходность «гарантирована», «рынок всегда растёт», «дивиденды = гарантированная прибыль», «высокая доходность без риска», подмена понятий в финансах), плюс реклама собственных курсов/рассылок/консультаций по экономике и фондовому рынку. В описании указывать, какой тезис противоречит теории и что именно продаётся |
 | 🔵 | Скрываемая тайна / «правда», которую раскрывают: «на самом деле», «настоящая причина», инсайдерские знания, замалчиваемые факты |
 | ☠️ | Смерть или суицид в контексте: прямое упоминание смерти человека, суицида, «на гробовые», угроза жизни как вывод автора. Применяется и в таймлайне, и в блоке комментариев. Косы в Unicode нет — закреплён ☠️ (выбор пользователя, менять самостоятельно нельзя). Смерть техники («умер мотор», «машина умерла») — НЕ ☠️ |
+| 🤮 | Сарказм/насмешка (по модели `Kostya165/rubert_tiny2_russian_emotion_sentiment`). Глифа «рыгающий зелёной кислотой» в Unicode нет — закреплено 🤮 (FACE WITH OPEN MOUTH VOMITING, U+1F92E; в Twemoji рисуется зелёной кислотой, в Apple-шрифте желтоватое), подтверждение выбора ожидается. Применяется в таймлайне и в блоке комментариев |
 
 Rules:
 - **Reconcile with what was already delivered**: when the user challenges a contradiction between two answers about the same video, check the actual artifact (scratch transcript, log record) and say which path was used for THAT video before restating the general rule. A categorical claim that contradicts the analysis you delivered (e.g. "Whisper never touches video" after a Whisper-based analysis) reads as an error — phrase the pipeline as an order: existing subtitle track first, Whisper only as the audio-track fallback when no captions exist.
