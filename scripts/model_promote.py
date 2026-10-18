@@ -25,6 +25,34 @@ def main():
     if not os.path.exists(src):
         print("в staging нет модели", file=sys.stderr)
         return 1
+
+    # Пороги — свойство модели. Продвигать модель без своих порогов нельзя:
+    # иначе останутся пороги прежней модели, посчитанные на её логитах.
+    force = "--force" in sys.argv
+    new_thr = os.path.join(staging, "thresholds.npy")
+    live_thr = os.path.join(MODELS, "thresholds.npy")
+    if not os.path.exists(new_thr):
+        if not force:
+            print("у кандидата нет своих порогов — нужна калибровка (или --force)", file=sys.stderr)
+            return 1
+    else:
+        import hashlib
+        h_new = hashlib.sha256(open(new_thr, "rb").read()).hexdigest()
+        h_live = hashlib.sha256(open(live_thr, "rb").read()).hexdigest() if os.path.exists(live_thr) else ""
+        if h_new == h_live and not force:
+            print("пороги кандидата идентичны порогам живой модели — это пороги другой модели "
+                  "(или --force)", file=sys.stderr)
+            return 1
+        try:
+            import numpy as np
+            thr = np.load(new_thr)
+            labels = [l.strip() for l in open(os.path.join(staging, "labels.txt"), encoding="utf-8") if l.strip()]
+            if len(thr) != len(labels):
+                print(f"порогов {len(thr)}, меток {len(labels)} — не совпадает", file=sys.stderr)
+                return 1
+        except ImportError:
+            pass
+
     shutil.copy(src, os.path.join(MODELS, "classifier_int8.onnx"))
     for f in ("tokenizer.json", "labels.txt", "thresholds.npy", "config.json", "model_version.json"):
         if os.path.exists(os.path.join(staging, f)):

@@ -71,7 +71,15 @@ def main():
     text = sys.argv[1]
     min_conf = None
     if "--min" in sys.argv:
-        min_conf = float(sys.argv[sys.argv.index("--min") + 1])
+        idx = sys.argv.index("--min") + 1
+        if idx >= len(sys.argv):
+            print("--min требует значения (например --min 0.5)", file=sys.stderr)
+            return 1
+        try:
+            min_conf = float(sys.argv[idx])
+        except ValueError:
+            print(f"--min: не число «{sys.argv[idx]}»", file=sys.stderr)
+            return 1
     t0 = time.time()
     session()
     load_ms = round((time.time() - t0) * 1000)
