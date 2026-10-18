@@ -9,6 +9,7 @@
   python3 markers.py "текст" [--json]
 """
 import json, re, sys, os, collections
+import side   # боковой канал (укр/бел) — отдельный набор, не смешивается с основным языком
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 MARKERS = json.load(open(os.path.join(os.path.dirname(HERE), "psychology", "markers.json"), encoding="utf-8"))
@@ -74,14 +75,30 @@ def scan(text):
     if len(paras) > 1:
         stop = set("и в не на что как это то он она они мы вы я к с у о для по из но а также же ну да уж вот".split())
         sets = [set(re.findall(r"[а-яё]{4,}", p.lower())) - stop for p in paras]
+        # Боковой набор — отдельно от основного языка: каждое слово приводится к русской
+        # форме, и сравнение идёт только внутри бокового набора. Основной набор не трогается,
+        # боковой hit сообщается только там, где хотя бы в одном абзаце есть боковое слово —
+        # так ловится повтор тезиса через язык (мова ↔ русский), а не дублируется обычный
+        # повтор на основном языке.
+        side_sets = [set(side.to_ru(w) for w in re.findall(side.SIDE_CLASS, p) if len(w) >= 4) - stop for p in paras]
+        side_count = [side.side_words(p)[1] for p in paras]
         for i in range(len(paras)):
             for j in range(i + 1, len(paras)):
                 shared = sets[i] & sets[j]
-                if len(shared) >= 3:
+                main_hit = len(shared) >= 3
+                if main_hit:
                     hits.append({"family": "структурные маркеры", "marker": "repetition",
                                  "found": ", ".join(sorted(shared)),
                                  "context": f"абзац {i+1} ↔ абзац {j+1}",
                                  "candidates": MAP["структурные маркеры"]})
+                shared_side = side_sets[i] & side_sets[j]
+                # Боковой hit добавляется только там, где основной его не покрыл: иначе
+                # одно и то же совпадение сообщалось бы дважды.
+                if len(shared_side) >= 3 and (side_count[i] or side_count[j]) and not main_hit:
+                    hits.append({"family": "структурные маркеры", "marker": "repetition",
+                                 "found": ", ".join(sorted(shared_side)),
+                                 "context": f"абзац {i+1} ↔ абзац {j+1} (боковой канал: мова приведена к русской форме)",
+                                 "candidates": MAP["структурные маркеры"], "via_side": True})
     return hits
 
 def main():

@@ -7,6 +7,8 @@ sub-millisecond.
 """
 import json, math, os, re, sqlite3
 
+import side   # боковой канал для укр/бел — отдельный, индекс не перестраивается
+
 SKILL_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 PSY = os.path.join(SKILL_DIR, "psychology")
 DB_PATH = os.environ.get("PSYCH_RAG_DB", os.path.join(PSY, "rag", "psych.db"))
@@ -25,6 +27,17 @@ MODEL = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
 def norm_words(text):
     return re.findall(r"[a-zа-яё]{3,}", text.lower())
 
+def q_tokens(query):
+    """Токены запроса: основной язык без изменений + боковые слова, приведённые к
+    русской форме. Индекс не перестраивается: боковой язык не попадает в корпус, он
+    переводится только на стороне запроса — так запрос на мове попадает в существующий
+    русский индекс. Без этого lexical-половина для мовы даёт ноль совпадений."""
+    toks = norm_words(query)
+    for w in side.side_words(query)[0]:
+        if w not in toks:
+            toks.append(w)
+    return toks
+
 def open_db():
     con = sqlite3.connect(DB_PATH)
     con.execute("CREATE TABLE IF NOT EXISTS docs(id INTEGER PRIMARY KEY, kind TEXT, label TEXT, text TEXT)")
@@ -42,7 +55,7 @@ def bm25_scores(con, query, k1=1.5, b=0.75):
         for w in set(t):
             df[w] = df.get(w, 0) + 1
     avg = sum(len(t) for t in toks) / N
-    q = norm_words(query)
+    q = q_tokens(query)
     scores = {}
     for w in q:
         if w not in df:
@@ -84,7 +97,7 @@ def search(query, top_k=TOP_K, min_score=MIN_SCORE, con=None, qvec=None):
     con = con or open_db()
     lex = bm25_scores(con, query)
     cos = cosine_scores(con, qvec) if qvec is not None else {}
-    ql = norm_words(query)
+    ql = q_tokens(query)
     scored = {}
     for doc_id, s in lex.items():
         scored[doc_id] = W_BM25 * s
