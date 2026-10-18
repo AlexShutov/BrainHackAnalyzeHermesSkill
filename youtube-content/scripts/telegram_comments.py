@@ -176,28 +176,27 @@ def cmd_comments(a):
 
 
 def sentiment_block(comments):
-    """Настроение + однородность тредов тем же лексиконом, что и comment_sentiment.py."""
+    """Настроение + однородность тредов — тот же лексикон И то же определение треда,
+    что и comment_sentiment.py. Раньше здесь тред строился по reply_to: вложенный
+    ответ открывал новый тред, и на одном наборе комментариев пути давали разные
+    проценты (замер: 67% против 50%). Теперь все три пути (YouTube, Telegram, Rutube)
+    считают тред как корень + все потомки, и «в среднем по тредам» — простое среднее."""
     sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-    from comment_sentiment import classify
-    counts = {"злость": 0, "радость": 0, "недовольство": 0, "нейтрально": 0}
-    threads = {}
+    from comment_sentiment import classify, build_threads, thread_homogeneity
+    rows = []
     for c in comments:
         cat, _ = classify(c["text"])
-        counts[cat] += 1
-        tid = c["reply_to"] or c["id"]
-        threads.setdefault(tid, []).append((cat, cat != "нейтрально"))
-    total = len(comments)
+        rows.append({"id": c["id"], "parent": c["reply_to"] or "root",
+                     "author": c.get("author"), "text": c["text"], "cat": cat})
+    total = len(rows)
+    counts = {}
+    for r in rows:
+        counts[r["cat"]] = counts.get(r["cat"], 0) + 1
     mood = {k: round(v * 100 / total) for k, v in counts.items()}
-    hom = []
-    for tid, items in threads.items():
-        stance = [c for c, s in items if s]
-        if len(stance) < 2:
-            continue
-        dom = max((c for c in counts), key=lambda c: sum(1 for x in stance if x == c))
-        share = round(sum(1 for x in stance if x == dom) * 100 / len(stance))
-        hom.append({"thread": tid, "size": len(items), "dominant": dom, "homogeneity": share})
-    overall = round(sum(h["homogeneity"] for h in hom) / len(hom)) if hom else None
-    return {"mood": mood, "homogeneity_overall": overall, "threads": hom}
+    threads, by_id = build_threads(rows)
+    thread_lines, overall, weighted = thread_homogeneity(threads, by_id)
+    return {"mood": mood, "homogeneity_overall": overall,
+            "homogeneity_weighted": weighted, "threads": thread_lines}
 
 
 def main():

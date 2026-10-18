@@ -10,7 +10,7 @@ Fields: text, user.name, parent_id (None = root), created_ts.
 import argparse, json, os, re, sys, urllib.request
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from comment_sentiment import classify  # shared lexicon — keep both skills in sync
+from comment_sentiment import classify, build_threads, thread_homogeneity  # общий лексикон И общее определение треда — держать оба навыка в синхроне
 
 UA = {"User-Agent": "Mozilla/5.0"}
 
@@ -64,38 +64,18 @@ def main():
         counts[row["cat"]] = counts.get(row["cat"], 0) + 1
     mood = {k: round(100 * v / n) for k, v in counts.items()}
 
-    by_id = {row["id"]: row for row in rows}
-    threads = {}
-    for row in rows:
-        if row["parent"] != "root":
-            threads.setdefault(row["parent"], []).append(row)
-    for pid, replies in threads.items():
-        if pid in by_id:
-            replies.insert(0, by_id[pid])
-
-    thread_lines, hom_sum, hom_n = [], 0, 0
-    for pid, members in threads.items():
-        if len(members) < 2:
-            continue
-        stance = [m for m in members if m["cat"] != "нейтрально"]
-        p = by_id.get(pid) or members[0]
-        if len(stance) < 2:
-            thread_lines.append({"thread": p["text"][:60], "author": p["author"],
-                                 "size": len(members), "dominant": None, "homogeneity": None})
-            continue
-        ccount = {}
-        for m in stance:
-            ccount[m["cat"]] = ccount.get(m["cat"], 0) + 1
-        dom = max(ccount, key=ccount.get)
-        hom = round(100 * ccount[dom] / len(stance))
-        hom_sum += hom * len(stance); hom_n += len(stance)
-        thread_lines.append({"thread": p["text"][:60], "author": p["author"],
-                             "size": len(members), "dominant": dom, "homogeneity": hom})
-    overall_hom = round(hom_sum / hom_n) if hom_n else None
+    # то же определение треда (корень + все потомки) и то же «среднее по тредам»
+    # (простое), что и в comment_sentiment: раньше здесь тред строился по parent_id —
+    # вложенный ответ открывал новый тред, а «в среднем по тредам» выдавался
+    # взвешенным средним, и цифры между путями не сравнивались
+    threads, by_id = build_threads(rows)
+    thread_lines, overall_hom, weighted_hom = thread_homogeneity(threads, by_id)
 
     if args.json:
         print(json.dumps({"url": args.url, "comments": n, "mood": mood,
-                          "homogeneity_overall": overall_hom, "threads": thread_lines},
+                          "homogeneity_overall": overall_hom,
+                          "homogeneity_weighted": weighted_hom,
+                          "threads": thread_lines},
                          ensure_ascii=False))
     else:
         print(f"=== Настроение комментариев ({n}) ===")
@@ -106,7 +86,9 @@ def main():
         print(f"эмоционально окрашенных (без нейтральных): "
               f"{round(100 * (n - mood.get('нейтрально', 0)) / n)}%, из них «кричащих» {shouty}")
         print("\n=== Однородность ===")
-        print(f"в среднем по тредам: {overall_hom if overall_hom is not None else 'не измеряется'}")
+        print(f"в среднем по тредам: {overall_hom}%" if overall_hom is not None else "тредов с ответами нет")
+        if weighted_hom is not None and weighted_hom != overall_hom:
+            print(f"взвешенная по размеру тредов: {weighted_hom}%")
         print("по тредам (≥2 комментариев):")
         for t in thread_lines:
             if t["homogeneity"] is None:
