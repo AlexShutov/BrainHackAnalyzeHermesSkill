@@ -1,5 +1,15 @@
 # Psychology analysis skill (installable on a clean Hermes)
 
+**Нейросетевой классификатор дообучен на классическом корпусе по пропаганде и манипуляциям** — база знаний построена на текстах:
+
+1. *Спирица Е., Пелехатый М. — «Боевое НЛП» (2020)*
+2. *Непряхин Н. — «Я манипулирую тобой» (2018)*
+3. *Бернейс Э. — «Пропаганда» (2021)*
+4. *Эллюль Ж. — «Феномен пропаганды» (2023)*
+5. *Эко У. — «Полный назад!» (2012)*
+6. *Кара-Мурза С. — «Манипуляция сознанием»*
+7. *Арендт Х. — «Истоки тоталитаризма» (1996)*
+
 Marks manipulation devices in text/messages with the standing tag system, using three
 layers that do not depend on the text containing the name of a device. The corpus covers
 applied-psychology territory: manipulation and influence tactics, cognitive biases,
@@ -96,13 +106,24 @@ conversion), Google Chrome not needed, Telegram token only if the plugin path is
 `onnx` is needed at conversion time only; the runtime uses onnxruntime.
 The book is not in the repo (copyright); without it the index is built from `devices.json` only.
 
-### Books in the corpus
+### Books in the corpus (knowledge base)
 
 `rag_build.py` ingests every book it finds locally: `psychology/*.fb2` (chunked by FB2
-paragraphs with section titles) and `psychology/books/*.jsonl`. A PDF is added by
+paragraphs with section titles), `psychology/books/*.jsonl` and `psychology/*.pdf` via
+`scripts/book_ingest.py` (PDF / EPUB / .doc / .txt). The current corpus:
+
+1. *Спирица Е., Пелехатый М. — «Боевое НЛП» (2020)* — FB2
+2. *Непряхин Н. — «Я манипулирую тобой» (2018)* — PDF
+3. *Бернейс Э. — «Пропаганда» (2021)* — EPUB
+4. *Эллюль Ж. — «Феномен пропаганды» (2023)* — FB2
+5. *Эко У. — «Полный назад!» (2012)* — FB2
+6. *Кара-Мурза С. — «Манипуляция сознанием»* — DOC
+7. *Арендт Х. — «Истоки тоталитаризма» (1996)* — PDF (OCR-слой)
+
+A book is added by
 
 ```bash
-python3 scripts/book_ingest_pdf.py "<book>.pdf" --source "Автор «Название»"
+python3 scripts/book_ingest.py "<book>.pdf|.epub|.doc|.txt" --source "Автор «Название»"
 python3 scripts/rag_build.py   # rebuild the index over all books
 ```
 
