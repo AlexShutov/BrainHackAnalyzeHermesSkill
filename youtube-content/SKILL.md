@@ -131,7 +131,7 @@ Fields per comment: `author, text, likes, timestamp (unix), pinned, parent` (`pa
 
 ## Comment mood + thread homogeneity (standing algorithm)
 
-**Neural models (standing, replaces the dictionary lexicon).** Run on every analysis with the psych-rag-env interpreter (`/Users/alex/.hermes/tools/psych-rag-env/bin/python`, transformers + torch available). Always pass `truncation=True, max_length=512` — comments longer than 512 tokens crash BERT position embeddings (`RuntimeError: size of tensor a (625) must match tensor b (512)`).
+**Neural models (standing, replaces the dictionary lexicon).** Run on every analysis with the psych-rag-env interpreter (`/Users/alex/.hermes/tools/psych-rag-env/bin/python`, transformers + torch available). Always pass `truncation=True, max_length=512` — comments longer than 512 tokens crash BERT position embeddings (`RuntimeError: size of tensor a (625) must match tensor b (512)`). Ярлыки берутся из `config.id2label` самой модели (`neural_pass.py`); жёсткий список — только fallback для оффлайн-режима без config.json, и он обязан совпадать с порядком id2label: несоответствие порядка молча выдаёт другую эмоцию. Multi-label модели — sigmoid, одиночный класс — softmax.
 
 - `seara/rubert-base-cased-russian-emotion-detection-ru-go-emotions` — 28 multi-label emotions (anger, annoyance, disapproval, disgust, disappointment, sadness, grief, nervousness / admiration, joy, amusement, approval, love, gratitude, optimism, excitement, pride, relief, caring, desire / neutral). Test F1 ~0.79 macro on CEDR, AUC 0.93.
 - `cointegrated/rubert-tiny-toxicity` — multi-label: non-toxic, insult, obscenity, threat, dangerous (per-label ROC AUC: insult 0.991, threat 0.991, obscenity 0.988).
