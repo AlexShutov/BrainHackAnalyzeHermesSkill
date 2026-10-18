@@ -1,6 +1,21 @@
+%%{init: {"theme":"base","themeVariables":{
+  "background":"#FFFFFF","fontFamily":"Segoe UI, Arial, sans-serif","fontSize":"14px",
+  "primaryColor":"#E8F1FB","primaryTextColor":"#1B3A57","primaryBorderColor":"#0078D4",
+  "lineColor":"#5B9BD5","clusterBkg":"#F7FAFD","clusterBorder":"#B8D4EE",
+  "edgeLabelBackground":"#FFFFFF"
+},"flowchart":{"curve":"basis","nodeSpacing":28,"rankSpacing":36,"htmlLabels":true}}}%%
 flowchart TB
+    classDef input fill:#0078D4,stroke:#005A9E,color:#FFFFFF,stroke-width:1.5px
+    classDef stt fill:#038387,stroke:#026364,color:#FFFFFF,stroke-width:1.5px
+    classDef stage fill:#00B294,stroke:#008272,color:#FFFFFF,stroke-width:1.5px
+    classDef psy fill:#EEE9F7,stroke:#8661C5,color:#3B2E58,stroke-width:1.5px
+    classDef psyCore fill:#8661C5,stroke:#6B4BA1,color:#FFFFFF,stroke-width:1.5px
+    classDef pass fill:#FFF1E6,stroke:#CA5010,color:#6B2E00,stroke-width:1.5px
+    classDef out fill:#107C10,stroke:#0B5A0B,color:#FFFFFF,stroke-width:1.5px
+    classDef decide fill:#FFD966,stroke:#C19C00,color:#3B2E00,stroke-width:1.5px
+
     subgraph IN["1 · Input"]
-        URL["Video link<br/>YouTube / RuTube"]
+        URL["🎬 Video link<br/>YouTube / RuTube"]
     end
 
     subgraph TR["2 · Speech-to-text"]
@@ -18,7 +33,7 @@ flowchart TB
         RAG["Layer 2 · RAG retrieval (hybrid BM25 + embeddings 0.4/0.6)<br/>corpus: manipulation & propaganda literature + 70 device definitions<br/>framing · inoculation (McGuire) · narrative arc · emotional build-up"]
         CLF["Layer 3 · ONNX classifier<br/>XLM-RoBERTa-large · 23 persuasion techniques (SemEval-2023)<br/>int8 quantized · gated by Layer 1"]
         CONF{"Layers disagree?"}
-        BOTH["show both verdicts<br/>(classifier is a second opinion, never silent override)"]
+        BOTH["show both verdicts<br/>(classifier is a second opinion, never a silent override)"]
         CROSS["Cross-passage pass<br/>devices that exist only across paragraphs:<br/>framing · repetition with variation · delayed conclusion<br/>inoculation against criticism · selection bias"]
     end
 
@@ -29,7 +44,7 @@ flowchart TB
         COM["Comments analysis<br/>lexicon sentiment: anger / joy / discontent<br/>per-thread homogeneity (agreement proxy)"]
     end
 
-    OUT["6 · Delivery<br/>summary + single sorted timeline, clickable timestamps<br/>+ comment mood block · replay log for recall"]
+    OUT["6 · Delivery 📬<br/>summary + single sorted timeline, clickable timestamps<br/>+ comment mood block · replay log for recall"]
 
     URL --> YT
     URL --> RT
@@ -51,3 +66,11 @@ flowchart TB
     COM --> OUT
     META --> OUT
     VAL --> RAG
+
+    class URL input
+    class YT,RT,WH,META stt
+    class VAL stage
+    class MARK,RAG,CLF,CROSS,BOTH psy
+    class CONF decide
+    class L1,L2,L3,COM pass
+    class OUT out

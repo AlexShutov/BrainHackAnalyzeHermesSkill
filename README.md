@@ -19,9 +19,18 @@ single sorted timeline with clickable timestamps.
 ![Video analysis pipeline](assets/video-analysis-pipeline.png)
 
 ```mermaid
+%%{init: {"theme":"base","themeVariables":{"background":"#FFFFFF","fontFamily":"Segoe UI, Arial, sans-serif","primaryColor":"#E8F1FB","primaryTextColor":"#1B3A57","primaryBorderColor":"#0078D4","lineColor":"#5B9BD5","clusterBkg":"#F7FAFD","clusterBorder":"#B8D4EE","edgeLabelBackground":"#FFFFFF"},"flowchart":{"curve":"basis","htmlLabels":true}}}%%
 flowchart TB
+    classDef input fill:#0078D4,stroke:#005A9E,color:#FFFFFF,stroke-width:1.5px
+    classDef stt fill:#038387,stroke:#026364,color:#FFFFFF,stroke-width:1.5px
+    classDef stage fill:#00B294,stroke:#008272,color:#FFFFFF,stroke-width:1.5px
+    classDef psy fill:#EEE9F7,stroke:#8661C5,color:#3B2E58,stroke-width:1.5px
+    classDef decide fill:#FFD966,stroke:#C19C00,color:#3B2E00,stroke-width:1.5px
+    classDef pass fill:#FFF1E6,stroke:#CA5010,color:#6B2E00,stroke-width:1.5px
+    classDef out fill:#107C10,stroke:#0B5A0B,color:#FFFFFF,stroke-width:1.5px
+
     subgraph IN["1 · Input"]
-        URL["Video link<br/>YouTube / RuTube"]
+        URL["🎬 Video link<br/>YouTube / RuTube"]
     end
     subgraph TR["2 · Speech-to-text"]
         YT["YouTube track<br/>youtube-transcript-api<br/>manual + auto captions, ru/en"]
@@ -39,7 +48,7 @@ flowchart TB
         L1["Logical devices ⚫ · Propaganda & rhetoric<br/>in-group/out-group framing · omission bias"]
         COM["Comments sentiment · thread homogeneity"]
     end
-    OUT["6 · Delivery: summary + tagged timeline, clickable timestamps"]
+    OUT["6 · Delivery 📬: summary + tagged timeline, clickable timestamps"]
     URL --> YT & RT
     YT --> VAL
     RT -. no captions .-> WH
@@ -49,10 +58,17 @@ flowchart TB
     CROSS --> L1
     L1 --> OUT
     COM --> OUT
+
+    class URL input
+    class YT,RT,WH stt
+    class VAL stage
+    class MARK,RAG,CLF,CROSS psy
+    class L1,COM pass
+    class OUT out
 ```
 
-The full diagram source lives in
-[`assets/video-analysis-pipeline.mmd`](assets/video-analysis-pipeline.mmd).
+The colorful version above is exactly what GitHub renders; a high-resolution PNG export
+lives alongside the source in [`assets/`](assets/video-analysis-pipeline.mmd).
 
 1. **Marker layer** — `scripts/markers.py` + `psychology/markers.json`: deterministic, no LLM,
    ~1 ms. Finds what is physically visible in the text (presupposition triggers per Levinson,
