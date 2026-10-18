@@ -1,0 +1,53 @@
+flowchart TB
+    subgraph IN["1 · Input"]
+        URL["Video link<br/>YouTube / RuTube"]
+    end
+
+    subgraph TR["2 · Speech-to-text"]
+        YT["YouTube track<br/>youtube-transcript-api<br/>manual + auto captions, ru/en"]
+        RT["RuTube track<br/>yt-dlp extractor → srt"]
+        WH["Fallback ASR<br/>faster-whisper, int8, ~10x realtime<br/>flagged as machine transcript"]
+        META["Metadata<br/>oEmbed / RuTube API<br/>title · author"]
+    end
+
+    VAL["3 · Validate & chunk<br/>language check · 50k+ chars → 40k chunks, 2k overlap"]
+
+    subgraph PSY["4 · Psychology-grounded analysis"]
+        direction TB
+        MARK["Layer 1 · Lexical markers (deterministic, ~1 ms)<br/>presupposition triggers (Levinson) · epistemic modality<br/>nominalization · agent deletion · evaluative lexicon"]
+        RAG["Layer 2 · RAG retrieval (hybrid BM25 + embeddings 0.4/0.6)<br/>corpus: manipulation & propaganda literature + 70 device definitions<br/>framing · inoculation (McGuire) · narrative arc · emotional build-up"]
+        CLF["Layer 3 · ONNX classifier<br/>XLM-RoBERTa-large · 23 persuasion techniques (SemEval-2023)<br/>int8 quantized · gated by Layer 1"]
+        CONF{"Layers disagree?"}
+        BOTH["show both verdicts<br/>(classifier is a second opinion, never silent override)"]
+        CROSS["Cross-passage pass<br/>devices that exist only across paragraphs:<br/>framing · repetition with variation · delayed conclusion<br/>inoculation against criticism · selection bias"]
+    end
+
+    subgraph PASS["5 · Content passes"]
+        L1["Logical devices ⚫<br/>false dilemma · post hoc · survivorship bias<br/>appeal to fear / authority · concept substitution"]
+        L2["Propaganda & rhetoric<br/>unsupported praise · double standards<br/>in-group / out-group framing (us vs them)<br/>appeals to pride · omission bias"]
+        L3["Teaching & insider value · Advertising<br/>financial misinformation (risk-free yield myths)<br/>hidden-truth narratives"]
+        COM["Comments analysis<br/>lexicon sentiment: anger / joy / discontent<br/>per-thread homogeneity (agreement proxy)"]
+    end
+
+    OUT["6 · Delivery<br/>summary + single sorted timeline, clickable timestamps<br/>+ comment mood block · replay log for recall"]
+
+    URL --> YT
+    URL --> RT
+    YT --> VAL
+    RT --> VAL
+    RT -. no captions .-> WH
+    WH --> VAL
+    MARK --> CLF
+    MARK --> CONF
+    RAG --> CONF
+    CLF --> CONF
+    CONF -->|yes| BOTH
+    CONF -->|no| CROSS
+    BOTH --> CROSS
+    CROSS --> L1
+    CROSS --> L2
+    CROSS --> L3
+    L1 & L2 & L3 --> OUT
+    COM --> OUT
+    META --> OUT
+    VAL --> RAG

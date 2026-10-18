@@ -7,6 +7,53 @@ propaganda techniques and logical fallacies, in both Russian and English text. A
 part of the corpus is propaganda analysis — how persuasion campaigns and totalitarian
 regimes manufacture consent, and how to recognize and counter it.
 
+## How the bot analyzes video content (YouTube / RuTube)
+
+The same psychology-grounded stack powers the Telegram bot's video analysis: a transcript
+(YouTube/RuTube caption tracks, or local `faster-whisper` ASR as fallback) runs through the
+marker → RAG → classifier pipeline, a cross-passage pass for devices that only exist across
+paragraphs, content passes (logical devices, propaganda and rhetoric, financial
+misinformation), and a lexicon-based comment-sentiment stage. The result is a summary plus a
+single sorted timeline with clickable timestamps.
+
+![Video analysis pipeline](assets/video-analysis-pipeline.png)
+
+```mermaid
+flowchart TB
+    subgraph IN["1 · Input"]
+        URL["Video link<br/>YouTube / RuTube"]
+    end
+    subgraph TR["2 · Speech-to-text"]
+        YT["YouTube track<br/>youtube-transcript-api<br/>manual + auto captions, ru/en"]
+        RT["RuTube track<br/>yt-dlp extractor → srt"]
+        WH["Fallback ASR<br/>faster-whisper, int8<br/>flagged as machine transcript"]
+    end
+    VAL["3 · Validate & chunk"]
+    subgraph PSY["4 · Psychology-grounded analysis"]
+        MARK["Layer 1 · Lexical markers<br/>presupposition triggers (Levinson) · epistemic modality<br/>nominalization · agent deletion · evaluative lexicon"]
+        RAG["Layer 2 · RAG retrieval<br/>hybrid BM25 + embeddings<br/>framing · inoculation · narrative arc"]
+        CLF["Layer 3 · ONNX classifier<br/>23 persuasion techniques (SemEval-2023)"]
+        CROSS["Cross-passage pass<br/>framing · repetition · delayed conclusion<br/>inoculation against criticism · selection"]
+    end
+    subgraph PASS["5 · Content passes"]
+        L1["Logical devices ⚫ · Propaganda & rhetoric<br/>in-group/out-group framing · omission bias"]
+        COM["Comments sentiment · thread homogeneity"]
+    end
+    OUT["6 · Delivery: summary + tagged timeline, clickable timestamps"]
+    URL --> YT & RT
+    YT --> VAL
+    RT -. no captions .-> WH
+    WH --> VAL
+    VAL --> MARK & RAG
+    MARK --> CLF
+    CROSS --> L1
+    L1 --> OUT
+    COM --> OUT
+```
+
+The full diagram source lives in
+[`assets/video-analysis-pipeline.mmd`](assets/video-analysis-pipeline.mmd).
+
 1. **Marker layer** — `scripts/markers.py` + `psychology/markers.json`: deterministic, no LLM,
    ~1 ms. Finds what is physically visible in the text (presupposition triggers per Levinson,
    modality and epistemic distance, nominalization and agent deletion, evaluative lexicon,
