@@ -19,8 +19,8 @@ pick_python() {
 
 PYBIN="$(pick_python || true)"
 if [ -z "$PYBIN" ]; then
-  echo "Нужен CPython 3.11-3.14 (onnxruntime не имеет колёс для более новых версий)." >&2
-  echo "Текущий python3: $(python3 -c 'import sys; print("%d.%d" % sys.version_info[:2])' 2>/dev/null || echo '?')" >&2
+  echo "CPython 3.11-3.14 is required (onnxruntime ships no wheels for newer versions)." >&2
+  echo "Current python3: $(python3 -c 'import sys; print("%d.%d" % sys.version_info[:2])' 2>/dev/null || echo '?')" >&2
   exit 1
 fi
 
@@ -34,7 +34,7 @@ fi
 if [ "${SKIP_TORCH:-0}" != "1" ]; then
   "$VENV/bin/pip" install --quiet torch transformers onnx
 else
-  echo "  torch/onnx пропущены (SKIP_TORCH=1) — экспорт не выполнится, нужен готовый ONNX-экспорт модели"
+  echo "  torch/onnx skipped (SKIP_TORCH=1) — export will not run; a pre-exported ONNX model is required"
 fi
 
 echo "2/4 weights: download + convert to ONNX int8"
@@ -49,7 +49,7 @@ cp "$SKILL/plugin/psych-rag/__init__.py" "$SKILL/plugin/psych-rag/plugin.yaml" "
 
 cat <<EOF
 
-Добавьте MCP-сервер в config.yaml:
+Add the MCP server to config.yaml:
 
   mcp_servers:
     psychology-rag:
@@ -57,8 +57,9 @@ cat <<EOF
       args: ["$SKILL/scripts/rag_mcp.py"]
       enabled: true
 
-и перезапустите Hermes (плагины и MCP грузятся на старте).
+then restart Hermes (plugins and MCP load at startup).
 
-Книга в репозиторий не включена (авторские права): без неё индекс строится только по
-devices.json — навык работает, но retrieval даёт только определения приёмов.
+The books are not included in the repository (copyright): without them the index is
+built from devices.json only — the skill works, but retrieval returns device
+definitions alone. To add a book, see "Books in the corpus" in README.md.
 EOF

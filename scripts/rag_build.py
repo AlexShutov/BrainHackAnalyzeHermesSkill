@@ -118,7 +118,7 @@ def main():
                     [(i + 1, np_bytes(v)) for i, v in enumerate(kept_vecs)])
     con.commit()
     print(f"docs: {len(kept)} (devices {sum(1 for k,_,_ in kept if k=='device')}, "
-          f"chunks {sum(1 for k,_,_ in kept if k=='chunk')}; дубликатов снято: {dropped})")
+          f"chunks {sum(1 for k,_,_ in kept if k=='chunk')}; duplicates dropped: {dropped})")
     print(f"model warm/cold load: {load:.1f} s | index build: {time.time()-t0:.1f} s | db: {R.DB_PATH}")
 
 
