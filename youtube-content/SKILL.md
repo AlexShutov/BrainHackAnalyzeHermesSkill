@@ -120,6 +120,14 @@ Fields per comment: `author, text, likes, timestamp (unix), pinned, parent` (`pa
 - The WEB innertube client now returns key-based commentViewModels without text (raw scraping returns 0 comments); yt-dlp handles this correctly — do not hand-roll innertube scraping.
 - Comments are part of the standard analysis: on any «анализ»/«проанализируй» request, fetch ALL comments and run `scripts/comment_sentiment.py` — deliver the mood + homogeneity block after the timeline (see below). For plain summary/transcript requests without the trigger word, comments are not fetched.
 
+## Language gate (ukr_detect.py) — mechanics after the 2026-10-18 fix
+
+- Evidence is counted ONCE PER WORD (not per character, and not twice as letter+dictionary). A short entry (≤3 chars: `ще`, `дід`, `є`, `па`, `ды`) matches only as a whole word — otherwise the Russian `щелей` reads as Ukrainian `ще`. Longer entries match as a prefix so inflected forms are caught (`українські`, `найкращий`, `паняццях`).
+- Weak entries (homonyms that also exist in Russian: `па`, `ды`, `якая`, `які`, `таму`, `аб`, `малы`) never decide a language on their own — they only reinforce a language already decided by strong evidence. `AMBIG` entries are never counted as unambiguous (they must not also sit in `UK_WORDS`).
+- One DECISIVE evidence decides the language: `ї, є, ґ` (absent in Belarusian and Russian) → uk; `ў` (absent in Ukrainian) → be. Shared `і`/`як`/`але` only prove "not Russian" → `amb`.
+- Majority gate is measured by TEXT VOLUME (`nonru_share_chars`), not by the number of comments — `nonru_share_items` is reported separately for cross-check. One short Ukrainian comment among long Russian ones is 2% of text, not 50%.
+- 🐷 is set only when the segment language is `uk` (`tag` field); `be` and `amb` get `tag=None` and are processed as usual Russian.
+
 ## Comment mood + thread homogeneity (standing algorithm)
 
 **Neural models (standing, replaces the dictionary lexicon).** Run on every analysis with the psych-rag-env interpreter (`/Users/alex/.hermes/tools/psych-rag-env/bin/python`, transformers + torch available). Always pass `truncation=True, max_length=512` — comments longer than 512 tokens crash BERT position embeddings (`RuntimeError: size of tensor a (625) must match tensor b (512)`).
