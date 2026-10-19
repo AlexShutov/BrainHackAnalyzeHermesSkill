@@ -136,8 +136,14 @@ def device_pairs(text):
     try:
         hits = markers.scan(text)
         if not hits:
+            # гейт слоя 3: классификатор вызывается только там, где сработали маркеры
             return None
-        pairs = TR.device_pairs(hits, classifier.classify(text))
+        rows = classifier.classify(text, min_conf=0.70)
+        # Комментарий — один абзац. `classifier.classify()` сама `para` не несёт (её
+        # добавляет тёплый worker), поэтому строке приписываем абзац маркерного hit-а:
+        # иначе пары склеиваются по ключу None и вердикт модели теряется.
+        para = hits[0].get("para")
+        pairs = TR.device_pairs(hits, [dict(r, para=para) for r in rows])
     except Exception:
         return None
     return next(iter(pairs.values()), None)

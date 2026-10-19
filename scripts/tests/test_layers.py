@@ -608,6 +608,24 @@ class TagRuleTests(unittest.TestCase):
         finally:
             markers.scan, classifier.classify = ms, cs
 
+    def test_classifier_verdict_attaches_to_comment_paragraph(self):
+        # classify() не несёт `para` (её добавляет worker): без атрибуции вердикт модели
+        # теряется, и комментарий с ложной дилеммой остаётся без пары
+        ms, cs = markers.scan, classifier.classify
+        markers.scan = lambda txt: [{"family": "структурные маркеры", "marker": "repetition",
+                                     "para": 1, "found": "x", "context": "y",
+                                     "candidates": ["Ложная дилемма"]}]
+        classifier.classify = lambda text, min_conf=None: [
+            {"label": "False_Dilemma-No_Choice", "p": 0.80, "threshold": 0.57, "chunk": 1,
+             "ru": "Ложная дилемма", "device": "Ложная дилемма"}]
+        try:
+            self.assertEqual(CA.device_pairs("либо A, либо B"), "🎭🧠")
+            # гейт: без маркеров классификатор не вызывается и пара не ставится
+            markers.scan = lambda txt: []
+            self.assertIsNone(CA.device_pairs("либо A, либо B"))
+        finally:
+            markers.scan, classifier.classify = ms, cs
+
     def test_dilts_families_route_to_nlp(self):
         import psych_layer as PL
         hit = {"family": "Фокусы языка: намерение и переопределение", "marker": "m",
