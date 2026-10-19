@@ -570,6 +570,17 @@ class TagRuleTests(unittest.TestCase):
                                 {"toxicity": {}, "sarcasm": {"sarcasm": 0.31}}), "🤢")
         self.assertIn("🤢", CA.PRIORITY, "константа приоритета расходится с фактическим порядком tag()")
 
+    def test_death_tag_is_human_only(self):
+        self.assertIsNone(CA.death_tag("мотор умер на холостых"), "смерть техники — не ☠️")
+        self.assertIsNone(CA.death_tag("кошка погибла под машиной"), "смерть животного — не ☠️")
+        self.assertIsNone(CA.death_tag("погиб"), "без человека-субъекта метка не ставится")
+        self.assertEqual(CA.death_tag("человек погиб"), "☠️")
+        self.assertEqual(CA.death_tag("умерла мама"), "☠️")
+        self.assertEqual(CA.death_tag("это суицид"), "☠️")
+        # приоритет: 💸 -> приём -> ☠️ -> 🔴
+        self.assertEqual(CA.tag("купите, человек погиб", "недовольство", {}), "💸")
+        self.assertEqual(CA.tag("человек погиб", "недовольство", {}), "☠️")
+
     def test_priority_order_matches_docstring(self):
         """Docstring — это доставляемое правило; он обязан совпадать с фактическим
         порядком tag(). Раньше в нём не было 🤢, и правило обещало 🔴 там, где код
