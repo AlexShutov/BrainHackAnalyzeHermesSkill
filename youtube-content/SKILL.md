@@ -118,7 +118,7 @@ PYTHONPATH=~/.hermes/cache/scratch/yt-pylib python SKILL_DIR/scripts/fetch_comme
 
 Fields per comment: `author, text, likes, timestamp (unix), pinned, parent` (`parent == "root"` = top-level; otherwise the parent comment id — replies). Order is YouTube's default (top). Pitfalls:
 - Comments disabled on the video → script exits with a clear message; say so, don't fabricate.
-- Fetching ALL comments on a big video is slow — use `--limit` for a quick pass (e.g. top 50).
+- Fetching ALL comments on a big video is slow — use `--limit` for a quick pass (e.g. top 50), and cache the fetched set by video id in scratch so a second analysis of the same video reuses it instead of re-fetching.
 - The WEB innertube client now returns key-based commentViewModels without text (raw scraping returns 0 comments); yt-dlp handles this correctly — do not hand-roll innertube scraping.
 - Comments are part of the standard analysis: on any «анализ»/«проанализируй» request, fetch ALL comments and run `scripts/comment_sentiment.py` — deliver the mood + homogeneity block after the timeline (see below). For plain summary/transcript requests without the trigger word, comments are not fetched.
 
@@ -143,7 +143,9 @@ Emoji mapping for comments (one tag per comment): 💸 — продающий/м
 
 **Delivery format for the comment block:** no quoted comment text, no usernames (правило пользователя, 2026-10-18 — ники случайных комментаторов не показывать). Два блока: (1) распределение по ВСЕМ комментариям (counts + %) плюс одна строка-оговорка про модель; (2) сводка по тредам БЕЗ перечисления ников: число активных тредов (≥2 содержательных), распределение доминирующих тегов по тредам, средняя однородность, и 1–2 предложения о самых дружных темах по содержанию. Threads with only neutral comments are not counted as active. State once that the classifier is a model, not a dictionary: sarcasm/irony can still be misclassified, and homogeneity measures emotional coloring, not semantic agreement.
 
-Legacy lexicon path (`scripts/comment_sentiment.py`) remains for cross-checks and for Rutube/Telegram comments where the neural models are not run; when both are available, deliver the neural numbers and note the difference.
+Legacy lexicon path (`scripts/comment_sentiment.py`) remains for cross-checks. **One entry point for the comment block, one layer on all three paths** (YouTube, Rutube, Telegram): the neural pass must run on every path, otherwise mood and homogeneity numbers are not comparable between platforms and the delivered block mixes two systems. If a path can only run the lexicon, name which layer produced the numbers instead of mixing them.
+
+Run the neural pass in batches (batch 32), not comment by comment — on a few hundred comments per-item inference is ~10× slower.
 
 Lexicon matching semantics (fixed 2026-10-18, was substring-only): stems match at word start, short stems (≤3 chars: `ура`, `бык`, `фу`) only as whole words — otherwise `ураган` reads as радость and `классический` as радость (`класс` was removed from the lexicon for this reason). Negation flips a positive-category hit: `не лучший`, `не радость`, `не злой` → недовольство, not радость/злость. Negated forms whose base stem lives in JOY/ANGER are NOT listed in DISCONTENT (double counting). Tie between categories resolves to the negative reading (order: злость → недовольство → радость), deterministically.
 

@@ -49,7 +49,38 @@ def open_db(readonly=True):
     con.execute("CREATE TABLE IF NOT EXISTS vec(id INTEGER PRIMARY KEY REFERENCES docs(id), blob BLOB)")
     return con
 
-def bm25_scores(con, query, k1=1.5, b=0.75):
+def ensure_fts(con):
+    """Настоящая FTS5-таблица. Раньше навык описывался как FTS5, но индекса в БД не было:
+    лексическая половина была ручным полным проходом по корпусу (322 мс на запрос при
+    9062 докуах). FTS5-запрос по тому же корпусу — 0-1 мс, то есть ~300x.
+
+    Индекс строится в пути построения (там есть право на запись); запросная часть
+    работает по нему через mode=ro."""
+    con.execute("CREATE VIRTUAL TABLE IF NOT EXISTS docs_fts USING fts5(text, content='docs', content_rowid='id')")
+
+
+def fts_ready(con):
+    return con.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='docs_fts'").fetchone() is not None
+
+
+def bm25_scores(con, query, k1=1.5, b=0.75, candidate_limit=200):
+    """Лексическая половина: FTS5 bm25(), если индекс есть; иначе — прежний полный проход
+    (старые БД без FTS5 и тесты на памяти). Нормализация по максимуму сохранена, чтобы
+    веса гибрида (W_BM25/W_COS) и MIN_SCORE остались сравнимыми с прежними замерами."""
+    q = q_tokens(query)
+    if not q:
+        return {}
+    if fts_ready(con):
+        rows = con.execute(
+            "SELECT rowid, bm25(docs_fts) FROM docs_fts WHERE docs_fts MATCH ? "
+            "ORDER BY bm25(docs_fts) LIMIT ?", (" OR ".join(q), candidate_limit)).fetchall()
+        if not rows:
+            return {}
+        raw = {r[0]: -r[1] for r in rows}          # FTS5 отдаёт отрицательный rank: меньше = лучше
+        mx = max(raw.values())
+        if mx <= 0:
+            return {}
+        return {k: v / mx for k, v in raw.items()}
     rows = list(con.execute("SELECT id, text FROM docs"))
     N = len(rows)
     if not N:
@@ -60,7 +91,6 @@ def bm25_scores(con, query, k1=1.5, b=0.75):
         for w in set(t):
             df[w] = df.get(w, 0) + 1
     avg = sum(len(t) for t in toks) / N
-    q = q_tokens(query)
     scores = {}
     for w in q:
         if w not in df:
@@ -109,9 +139,14 @@ def search(query, top_k=TOP_K, min_score=MIN_SCORE, con=None, qvec=None):
         scored[doc_id] = W_BM25 * s
     for doc_id, s in cos.items():
         scored[doc_id] = scored.get(doc_id, 0.0) + W_COS * s
+    # один запрос на все кандидатов вместо SELECT на каждый: раньше boost-цикл и резерв
+    # устройств делали по запросу на документ (до 200 запросов на запрос)
+    ids = list(scored)
+    meta = {r[0]: (r[1], r[2], r[3]) for r in con.execute(
+        "SELECT id, kind, label, text FROM docs WHERE id IN (" + ",".join("?" * len(ids)) + ")", ids)} if ids else {}
     # exact device-name boost from the lexical side
     for doc_id, s in scored.items():
-        row = con.execute("SELECT kind, label FROM docs WHERE id=?", (doc_id,)).fetchone()
+        row = meta.get(doc_id)
         if row and row[0] == "device" and any(w in norm_words(row[1]) for w in ql):
             scored[doc_id] = s + NAME_BOOST
     ranked = sorted(scored.items(), key=lambda kv: -kv[1])
@@ -120,7 +155,7 @@ def search(query, top_k=TOP_K, min_score=MIN_SCORE, con=None, qvec=None):
     for doc_id, score in ranked:
         if score < min_score or len(out) >= top_k:
             break
-        kind, label, text = con.execute("SELECT kind, label, text FROM docs WHERE id=?", (doc_id,)).fetchone()
+        kind, label, text = meta[doc_id]
         sn = snippet(text)
         cost = len(sn) + len(label) + 20
         if total + cost > MAX_OUT_CHARS:
@@ -132,11 +167,10 @@ def search(query, top_k=TOP_K, min_score=MIN_SCORE, con=None, qvec=None):
     # devices above a floor even when chunks outrank them
     if sum(1 for r in out if r["kind"] == "device") < 2:
         have = {r["id"] for r in out}
-        spare = [ (doc_id, score) for doc_id, score in ranked
-                  if doc_id not in have and score >= 0.20
-                  and con.execute("SELECT kind FROM docs WHERE id=?", (doc_id,)).fetchone()[0] == "device" ]
+        spare = [(doc_id, score) for doc_id, score in ranked
+                 if doc_id not in have and score >= 0.20 and meta.get(doc_id, ("",))[0] == "device"]
         for doc_id, score in spare[: 2 - sum(1 for r in out if r["kind"] == "device")]:
-            kind, label, text = con.execute("SELECT kind, label, text FROM docs WHERE id=?", (doc_id,)).fetchone()
+            kind, label, text = meta[doc_id]
             sn = snippet(text)
             if total + len(sn) + len(label) + 20 > MAX_OUT_CHARS:
                 break

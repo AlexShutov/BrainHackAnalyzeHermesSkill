@@ -25,7 +25,7 @@ sys.path.insert(0, YT)
 
 import markers, side
 import ukr_detect as ukr, comment_sentiment, status_post, neural_pass
-import classifier
+import classifier, rag_core as R
 
 def read(path):
     with open(path, encoding="utf-8") as f:
@@ -377,6 +377,96 @@ class TestOpenBugs(unittest.TestCase):
     def test_status_post_argv_guard(self):
         src = read(os.path.join(YT, "status_post.py"))
         self.assertIn("len(sys.argv)", src, "нет проверки аргументов — IndexError вместо usage")
+
+class RagPathTests(unittest.TestCase):
+    """Поведенческие тесты RAG: FTS5-путь, fallback, резерв устройств, одиночный meta-запрос,
+    read-only соединение. Проверяется поведение, а не наличие слов в исходнике."""
+
+    ROWS = [("device", "Ложная дилемма", "только два варианта: либо A, либо B"),
+            ("device", "Ошибка выжившего", "я заработал, значит метод работает"),
+            ("chunk", "Книга — Глава 1", "автор говорит: либо мы, либо они — это ложная дилемма выбора"),
+            ("chunk", "Книга — Глава 2", "гарантированная доходность без риска противоречит теории")]
+
+    def _mem(self, with_fts=True):
+        import sqlite3
+        con = sqlite3.connect(":memory:")
+        con.execute("CREATE TABLE docs(id INTEGER PRIMARY KEY, kind TEXT, label TEXT, text TEXT)")
+        con.executemany("INSERT INTO docs(kind, label, text) VALUES (?,?,?)", self.ROWS)
+        if with_fts:
+            R.ensure_fts(con)
+            con.execute("INSERT INTO docs_fts(docs_fts) VALUES('rebuild')")
+        return con
+
+    def test_fts5_and_scan_agree_on_top_hit(self):
+        con = self._mem(with_fts=True)
+        q = "ложная дилемма либо мы либо они"
+        fts = R.bm25_scores(con, q)
+        con.execute("DROP TABLE docs_fts")
+        scan = R.bm25_scores(con, q)
+        self.assertTrue(fts and scan, "оба пути пустые")
+        top_fts = max(fts, key=lambda k: fts[k])
+        top_scan = max(scan, key=lambda k: scan[k])
+        self.assertEqual(top_fts, top_scan, "FTS5 находит другой top-hit, чем прежний проход")
+        con.close()
+
+    def test_device_reserve_survives_chunk_heavy_query(self):
+        """Chunk-текст не должен вытеснять определения устройств из top-k."""
+        con = self._mem(with_fts=True)
+        out = R.search("либо мы либо они ложная дилемма выбора", top_k=2, min_score=0.05, con=con)
+        self.assertTrue(any(r["kind"] == "device" for r in out),
+                        "резерв устройств не сработал: top-k только из прозы")
+        con.close()
+
+    def test_single_meta_query(self):
+        """Один запрос на всех кандидатов вместо SELECT на каждый документ.
+        Служебные запросы FTS5 (docsize) не считаются — они неотделимы от bm25-ранжирования."""
+        con = self._mem(with_fts=True)
+        stmts = []
+        def cb(*a):
+            stmts.append(a[1] if len(a) == 3 else a[0])   # 3.12: (conn, sql, user); 3.14: (sql,)
+        con.set_trace_callback(cb)
+        R.search("ложная дилемма либо мы либо они", con=con)
+        own = [s for s in stmts if "docs_fts_docsize" not in s and not s.startswith("--")]
+        self.assertEqual([s for s in own if "WHERE id=?" in s], [],
+                         f"per-doc SELECTs вернулись: {own}")
+        self.assertLessEqual(len(own), 3, f"явных запросов больше, чем guard+match+meta: {own}")
+        con.close()
+
+    def test_query_connection_refuses_writes(self):
+        """Запросная часть обязана открывать БД mode=ro — проверка поведением, не строкой."""
+        import tempfile, sqlite3
+        path = os.path.join(tempfile.mkdtemp(), "test.db")
+        c0 = sqlite3.connect(path)
+        c0.execute("CREATE TABLE docs(id INTEGER PRIMARY KEY, kind TEXT, label TEXT, text TEXT)")
+        c0.commit(); c0.close()
+        old = R.DB_PATH
+        try:
+            R.DB_PATH = path
+            con = R.open_db()
+            try:
+                con.execute("CREATE TABLE hack(a INT)")
+                self.fail("запросное соединение позволяет писать")
+            except sqlite3.OperationalError:
+                pass
+            con.close()
+        finally:
+            R.DB_PATH = old
+
+    def test_chunk_budget_applies_to_merged_output(self):
+        """Бюджет MAX_OUT_CHARS — на слитый вывод, а не на каждый кусок: три куска не должны
+        давать втрое больше обещанных 2500 символов."""
+        con = self._mem(with_fts=True)
+        con.executemany("INSERT INTO docs(kind, label, text) VALUES (?,?,?)",
+                        [("chunk", f"Книга — Глава {i}", "дилемма " + "x" * 400) for i in range(20)])
+        con.execute("INSERT INTO docs_fts(docs_fts) VALUES('rebuild')")
+        chunks = ["дилемма " + "x" * 400] * 3
+        out = R.merge_chunked(chunks, top_k=25, min_score=0.0, con=con)
+        total = sum(len(r["snippet"]) + len(r["label"]) + 20 for r in out)
+        self.assertLessEqual(total, R.MAX_OUT_CHARS,
+                             f"слитый вывод больше обещанного бюджета: {total}")
+        self.assertGreater(len(out), 1, "бюджет обязан ограничивать вывод, а не отключать его")
+        con.close()
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
