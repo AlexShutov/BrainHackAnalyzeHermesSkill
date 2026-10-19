@@ -37,6 +37,29 @@ try:
 except Exception:
     tele = None
 
+# Модули, которые тесты подменяют фиксами. Подменённый атрибут обязан быть восстановлен:
+# `mod.os` — тот же объект, что у всего процесса, и невосстановленная подмена остаётся на
+# следующие тесты (следующий тест проходит или падает не по своей логике — например пустой
+# вывод вместо JSON). Снимок берётся по всем модулям навыка, загруженным в процесс (в том
+# числе импортированным внутри теста), и восстанавливается в tearDown — «забыть finally»
+# становится невозможным, а не зависимым от аккуратности конкретного теста.
+def skill_modules():
+    return {n: m for n, m in sys.modules.items()
+            if (getattr(m, "__file__", "") or "").startswith(SCRIPTS)}
+
+
+class SnapshotMixin:
+    def setUp(self):
+        self._snap = {n: dict(m.__dict__) for n, m in skill_modules().items()}
+
+    def tearDown(self):
+        for n, m in skill_modules().items():
+            snap = self._snap.get(n)
+            if not snap:
+                continue
+            for k, v in snap.items():
+                setattr(m, k, v)
+
 def load_plugin():
     spec = importlib.util.spec_from_file_location("psychrag", PLUGIN)
     m = importlib.util.module_from_spec(spec)
@@ -82,8 +105,9 @@ def run_classifier(text, extra=()):
     return json.loads(buf.getvalue())
 
 # --- A. регрессия на исправленном --------------------------------------------
-class TestFixed(unittest.TestCase):
+class TestFixed(SnapshotMixin, unittest.TestCase):
     def setUp(self):
+        super().setUp()
         classifier.session = lambda: FakeSession()
         classifier.tokenizer = lambda: FakeTok()
 
@@ -228,7 +252,7 @@ class TestFixed(unittest.TestCase):
         self.assertIn("ничего не найдено", res["content"][0]["text"])
 
 # --- B. правила, которые кодом не реализованы (падают) -----------------------
-class TestOpenBugs(unittest.TestCase):
+class TestOpenBugs(SnapshotMixin, unittest.TestCase):
     def test_plugin_gate_equals_platform_limit(self):
         """Поведение: сообщение 4061 символа с 2 абзацами проходит гейт, 4121 — отклоняется;
         итог никогда не превышает лимит платформы."""
@@ -1011,7 +1035,31 @@ class TestOpenBugs(unittest.TestCase):
         self.assertTrue(all(r["id"] for r in rows), "каноническая форма без поля id")
         self.assertEqual(rows[1]["reply_to"], 1, "reply_to потерялся")
 
-class TagRuleTests(unittest.TestCase):
+    def test_snapshot_mixin_restores_patched_module_attribute(self):
+        """Поведение: подмена атрибута модуля обязана восстанавливаться после теста.
+        Замер contamination-класса: `tele.out = lambda o: None` без finally дал следующему
+        тесту пустой вывод и падение на json.loads — тест проходил отдельно и падал в полном
+        прогоне, то есть ровно тот ложеловный «успех», о котором правило."""
+        class T(SnapshotMixin, unittest.TestCase):
+            def runTest(self):
+                pass
+        t = T("runTest")
+        t.setUp()
+        orig = markers.scan
+        markers.scan = lambda *a, **k: []
+        self.assertIsNot(markers.scan, orig)
+        t.tearDown()
+        self.assertIs(markers.scan, orig)
+
+    def test_all_test_classes_use_the_snapshot_mixin(self):
+        """Guard-проверка (не поведенческая): каждый тестовый класс обязан наследовать
+        SnapshotMixin — иначе подмена остаётся на следующие тесты."""
+        src = read(os.path.join(SCRIPTS, "tests", "test_layers.py"))
+        classes = re.findall(r"^class (\w+)\(([^)]*)\):", src, re.M)
+        bad = [c for c, bases in classes if c != "SnapshotMixin" and "SnapshotMixin" not in bases]
+        self.assertEqual(bad, [], "классы без снимка: " + ", ".join(bad))
+
+class TagRuleTests(SnapshotMixin, unittest.TestCase):
     """Поведенческие тесты на починки тегов комментария (пункты аудита)."""
 
     def test_toxic_tag_respects_threshold(self):
@@ -1125,7 +1173,7 @@ class TagRuleTests(unittest.TestCase):
         self.assertEqual(CA.tag("обычный текст", "нейтрально", {}), "🙂")
 
 
-class RagPathTests(unittest.TestCase):
+class RagPathTests(SnapshotMixin, unittest.TestCase):
     """Поведенческие тесты RAG: FTS5-путь, fallback, резерв устройств, одиночный meta-запрос,
     read-only соединение. Проверяется поведение, а не наличие слов в исходнике."""
 
@@ -1215,7 +1263,7 @@ class RagPathTests(unittest.TestCase):
         con.close()
 
 
-class WorkerTests(unittest.TestCase):
+class WorkerTests(SnapshotMixin, unittest.TestCase):
     """Тёплый worker: протокол JSON-lines, перезапуск после смерти процесса, деградация.
     Тесты идут без моделей (PSYCH_WORKER_NO_MODELS=1) — иначе каждый тест платит загрузку
     fastembed и ONNX."""
@@ -1270,7 +1318,7 @@ class WorkerTests(unittest.TestCase):
         c.stop()
 
 
-class CommentAnalysisTests(unittest.TestCase):
+class CommentAnalysisTests(SnapshotMixin, unittest.TestCase):
     """Единый входной модуль комментариев: один и тот же слой на всех трёх путях,
     отображение нейро-меток в корзины, приоритет тегов, общее определение треда."""
 
