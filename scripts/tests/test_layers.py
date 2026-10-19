@@ -12,7 +12,7 @@
      Они падают — это и есть остаток багов; тест их не «чинит», он показывает,
      где правило расходится с кодом. Такие тесты помечены в docstring.
 """
-import contextlib, importlib.util, io, json, os, re, sys, unittest
+import contextlib, importlib.util, io, json, os, re, sys, tempfile, unittest
 import numpy as np
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -466,6 +466,61 @@ class RagPathTests(unittest.TestCase):
                              f"слитый вывод больше обещанного бюджета: {total}")
         self.assertGreater(len(out), 1, "бюджет обязан ограничивать вывод, а не отключать его")
         con.close()
+
+
+class WorkerTests(unittest.TestCase):
+    """Тёплый worker: протокол JSON-lines, перезапуск после смерти процесса, деградация.
+    Тесты идут без моделей (PSYCH_WORKER_NO_MODELS=1) — иначе каждый тест платит загрузку
+    fastembed и ONNX."""
+
+    def _db(self):
+        import sqlite3
+        path = os.path.join(tempfile.mkdtemp(), "test.db")
+        con = sqlite3.connect(path)
+        con.execute("CREATE TABLE docs(id INTEGER PRIMARY KEY, kind TEXT, label TEXT, text TEXT)")
+        con.executemany("INSERT INTO docs(kind, label, text) VALUES (?,?,?)",
+                        [("device", "Ложная дилемма", "только два варианта: либо A, либо B")])
+        R.ensure_fts(con)
+        con.execute("INSERT INTO docs_fts(docs_fts) VALUES('rebuild')")
+        con.commit(); con.close()
+        return path
+
+    def _client(self):
+        import worker_client as wc
+        os.environ["PSYCH_WORKER_NO_MODELS"] = "1"
+        os.environ["PSYCH_RAG_DB"] = self._db()
+        return wc.WorkerClient(python=sys.executable)
+
+    def test_protocol_answers_all_ops(self):
+        c = self._client()
+        hello = c.start()
+        self.assertTrue(hello and hello.get("ok"), "worker не поздоровался")
+        self.assertFalse(hello.get("embedding"), "в тестовом режиме модели грузятся")
+        r = c.call("search", query="ложная дилемма")
+        self.assertTrue(r and r.get("results"), "search через worker пустой")
+        self.assertEqual(r["results"][0]["label"], "Ложная дилемма")
+        r = c.call("markers", text="все знают, что этот приём работает")
+        self.assertTrue(r and r.get("markers"), "markers через worker пустой")
+        r = c.call("classify", text="абзац", min=0.70, gated=True)
+        self.assertTrue(r and r.get("classification") == [], "classify без модели обязан вернуть пустой список")
+        r = c.call("bogus")
+        self.assertTrue(r and not r.get("ok") and r.get("error"), "неизвестный op молча проходит")
+        c.stop()
+
+    def test_client_restarts_after_process_death(self):
+        import signal
+        c = self._client()
+        self.assertTrue(c.start())
+        c.p.send_signal(signal.SIGKILL)
+        r = c.call("ping")
+        self.assertTrue(r and r.get("ok"), "клиент не перезапустил мёртвый worker")
+        c.stop()
+
+    def test_client_degrades_when_worker_unavailable(self):
+        import worker_client as wc
+        c = wc.WorkerClient(python="/nonexistent/python")
+        self.assertIsNone(c.call("ping"), "недоступный worker должен возвращать None, а не падать")
+        c.stop()
 
 
 if __name__ == "__main__":

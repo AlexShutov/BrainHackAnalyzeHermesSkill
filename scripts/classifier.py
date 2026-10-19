@@ -94,6 +94,26 @@ def classify(text, min_conf=None):
     out.sort(key=lambda x: -x["p"])
     return out
 
+def gated_paragraphs(text):
+    """Абзацы, где маркеры сработали. Одна логика для CLI и worker — иначе два пути
+    расходятся: у repetition found склеенная строка слов, которой нет ни в одном абзаце,
+    и абзац, помеченный только повтором, должен доходить до модели."""
+    paras = markers.paragraphs(text)
+    hits = markers.scan(text)
+    keep = set()
+    for h in hits:
+        pi = h.get("para")
+        if isinstance(pi, list):
+            keep.update(pi)
+        elif pi:
+            keep.add(pi)
+        else:
+            for i, pp in enumerate(paras, 1):
+                if h["found"].lower() in pp.lower():
+                    keep.add(i)
+    return [(i, pp) for i, pp in enumerate(paras, 1) if i in keep]
+
+
 def main():
     if len(sys.argv) < 2:
         print("usage: classifier.py <text> [--json] [--min 0.5] [--gated]", file=sys.stderr); return 1
@@ -112,27 +132,8 @@ def main():
     t0 = time.time()
     session()
     load_ms = round((time.time() - t0) * 1000)
-    paras = markers.paragraphs(text)
     gated = "--gated" in sys.argv
-    if gated:
-        hits = markers.scan(text)
-        # абзац берётся из индекса hit-а, а не из подстроки: у repetition found —
-        # склеенная строка слов, которой нет ни в одном абзаце, и абзац, помеченный
-        # только повтором, раньше до модели не доходил
-        keep = set()
-        for h in hits:
-            pi = h.get("para")
-            if isinstance(pi, list):
-                keep.update(pi)
-            elif pi:
-                keep.add(pi)
-            else:
-                for i, pp in enumerate(paras, 1):
-                    if h["found"].lower() in pp.lower():
-                        keep.add(i)
-        paras = [(i, pp) for i, pp in enumerate(paras, 1) if i in keep]
-    else:
-        paras = list(enumerate(paras, 1))
+    paras = gated_paragraphs(text) if gated else list(enumerate(markers.paragraphs(text), 1))
     rows = []
     t1 = time.time()
     for i, p in paras:

@@ -54,9 +54,14 @@ def ensure_fts(con):
     лексическая половина была ручным полным проходом по корпусу (322 мс на запрос при
     9062 докуах). FTS5-запрос по тому же корпусу — 0-1 мс, то есть ~300x.
 
+    Индексируются ДВЕ колонки: label и text. Прежний проход сканировал только text,
+    поэтому запрос по имени устройства (например «ложная дилемма») находил определение
+    лишь тогда, когда имя случайно встречалось в определении; отдельное имя устройства
+    не находилось никогда. Колонка label с весом 2.0 — это recall для таких запросов.
+
     Индекс строится в пути построения (там есть право на запись); запросная часть
     работает по нему через mode=ro."""
-    con.execute("CREATE VIRTUAL TABLE IF NOT EXISTS docs_fts USING fts5(text, content='docs', content_rowid='id')")
+    con.execute("CREATE VIRTUAL TABLE IF NOT EXISTS docs_fts USING fts5(label, text, content='docs', content_rowid='id')")
 
 
 def fts_ready(con):
@@ -72,8 +77,8 @@ def bm25_scores(con, query, k1=1.5, b=0.75, candidate_limit=200):
         return {}
     if fts_ready(con):
         rows = con.execute(
-            "SELECT rowid, bm25(docs_fts) FROM docs_fts WHERE docs_fts MATCH ? "
-            "ORDER BY bm25(docs_fts) LIMIT ?", (" OR ".join(q), candidate_limit)).fetchall()
+            "SELECT rowid, bm25(docs_fts, 2.0, 1.0) FROM docs_fts WHERE docs_fts MATCH ? "
+            "ORDER BY bm25(docs_fts, 2.0, 1.0) LIMIT ?", (" OR ".join(q), candidate_limit)).fetchall()
         if not rows:
             return {}
         raw = {r[0]: -r[1] for r in rows}          # FTS5 отдаёт отрицательный rank: меньше = лучше
@@ -106,14 +111,19 @@ def bm25_scores(con, query, k1=1.5, b=0.75, candidate_limit=200):
     mx = max(scores.values())
     return {k: v / mx for k, v in scores.items()}
 
-def cosine_scores(con, qvec):
+def cosine_scores(con, qvec, matrix=None):
     import numpy as np
-    rows = list(con.execute("SELECT id, blob FROM vec"))
-    if not rows or qvec is None:
+    if qvec is None:
         return {}
-    ids = [r[0] for r in rows]
-    emb = np.frombuffer(b"".join(r[1] for r in rows), dtype=np.float32).reshape(len(rows), -1)
-    emb = emb / (np.linalg.norm(emb, axis=1, keepdims=True) + 1e-9)
+    if matrix is not None:
+        ids, emb = matrix
+    else:
+        rows = list(con.execute("SELECT id, blob FROM vec"))
+        if not rows:
+            return {}
+        ids = [r[0] for r in rows]
+        emb = np.frombuffer(b"".join(r[1] for r in rows), dtype=np.float32).reshape(len(rows), -1)
+        emb = emb / (np.linalg.norm(emb, axis=1, keepdims=True) + 1e-9)
     q = qvec / (np.linalg.norm(qvec) + 1e-9)
     s = emb @ q
     return {i: float(v) for i, v in zip(ids, s)}
@@ -128,11 +138,11 @@ def snippet(text, limit=180):
         out += p + " "
     return out.strip() or s[:limit]
 
-def search(query, top_k=TOP_K, min_score=MIN_SCORE, con=None, qvec=None):
+def search(query, top_k=TOP_K, min_score=MIN_SCORE, con=None, qvec=None, matrix=None):
     own = con is None
     con = con or open_db()
     lex = bm25_scores(con, query)
-    cos = cosine_scores(con, qvec) if qvec is not None else {}
+    cos = cosine_scores(con, qvec, matrix) if qvec is not None else {}
     ql = q_tokens(query)
     scored = {}
     for doc_id, s in lex.items():
@@ -187,18 +197,20 @@ def chunks_of(text, size=CHUNK):
     return [text[i:i + size] for i in range(0, len(text), size)] if size else [text]
 
 
-def merge_chunked(chunks, top_k=TOP_K, min_score=MIN_SCORE, qvecs=None, con=None):
+def merge_chunked(chunks, top_k=TOP_K, min_score=MIN_SCORE, qvecs=None, con=None, matrix=None):
     """Один запрос на кусок: embedding видит только первые ~512 токена, и устройства из
     хвоста длинного текста без кусков не находятся никогда. Слитый результат — лучший hit
     по каждому устройству.
 
     Бюджет MAX_OUT_CHARS применяется к слитому выводу, а не к каждому куску: раньше при
     трёх кусках вывод мог быть втрое больше обещанных 2500 символов — лимит был на кусок.
+    `matrix` — кэш нормализованной матрицы векторов (тёплый worker); без него матрица
+    пересобирается на каждый запрос (~10 мс на 9k докуах).
     """
     merged = {}
     for i, c in enumerate(chunks):
         for r in search(c, top_k=top_k, min_score=min_score, con=con,
-                        qvec=(qvecs[i] if qvecs else None)):
+                        qvec=(qvecs[i] if qvecs else None), matrix=matrix):
             key = (r["kind"], r["label"])
             if key not in merged or r["score"] > merged[key]["score"]:
                 merged[key] = dict(r)

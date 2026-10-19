@@ -45,6 +45,28 @@ try:
 except Exception:
     _markers = None
 
+try:
+    import worker_client as _wc   # тёплый worker: модели загружены один раз
+except Exception:
+    _wc = None
+
+
+def worker_call(op, **kw):
+    """Один живой процесс вместо subprocess на каждое сообщение.
+    Замер: холодный путь ~2.7 с на сообщение (1.54 с embedding + 1.17 с ONNX + 30 мс маркеры),
+    тёплый ~50-70 мс. Если worker не поднимается — возврат None, вызывающий идёт
+    subprocess-путём (деградация, не отказ)."""
+    if _wc is None:
+        return None
+    try:
+        return _wc.client(RAG_PY).call(op, **kw)
+    except Exception:
+        return None
+
+
+def chunks_of(text, size=1500):
+    return [text[i:i + size] for i in range(0, len(text), size)] or [text]
+
 
 def paragraphs(text):
     if _markers is not None:
@@ -53,6 +75,9 @@ def paragraphs(text):
 
 
 def retrieve(text):
+    r = worker_call("search", query=text, chunks=chunks_of(text))
+    if r and r.get("results"):
+        return r["results"]
     try:
         # таймаут был рассчитан на срез 1500; на полном тексте embedding занимает
         # ~6 с (замер: 3.2 с на 1500, 6.2 с на 4000), поэтому запас увеличен
@@ -68,6 +93,9 @@ def retrieve(text):
 
 def marker_hits(text):
     """Surface signals present in the text itself — no terminology required."""
+    r = worker_call("markers", text=text)
+    if r and r.get("markers"):
+        return r["markers"]
     try:
         out = subprocess.run([RAG_PY, MARKERS, text, "--json"],
                              capture_output=True, text=True, timeout=TIMEOUT)
@@ -116,6 +144,9 @@ def classifier_hits(text, hits):
     """
     if os.environ.get("PSYCH_RAG_CLASSIFIER", "1") != "1" or not hits:
         return None
+    r = worker_call("classify", text=text, min=OPERATING_POINT, gated=True)
+    if r and r.get("classification"):
+        return r["classification"]
     try:
         out = subprocess.run([RAG_PY, CLASSIFIER, text, "--json", "--gated",
                               "--min", str(OPERATING_POINT)],

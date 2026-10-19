@@ -49,6 +49,25 @@ def call(script, args, timeout):
         return None
 
 
+try:
+    sys.path.insert(0, SCRIPTS)
+    import worker_client as _wc   # тёплый worker: модели загружены один раз
+except Exception:
+    _wc = None
+
+
+def worker_call(op, **kw):
+    """Тёплый путь тот же, что у плагина. Замер: холодный subprocess на вызов — 1.5 с
+    embedding, 1.2 с ONNX, 30 мс маркеры; тёплый — 4 мс embedding, 15 мс классификатор,
+    8 мс маркеры. Если worker не поднимается — None, и идёт прежний subprocess-путь."""
+    if _wc is None:
+        return None
+    try:
+        return _wc.client(PY).call(op, **kw)
+    except Exception:
+        return None
+
+
 # --- subtype routing: which ⚫ pair applies to a flagged paragraph ---
 
 # Все 23 метки SemEval-2023 распределены явно; NLP-классов у классификатора нет —
@@ -151,19 +170,22 @@ def main():
                          ensure_ascii=False))
         return
 
-    markers = call("markers.py", [text, "--json"], 30)
+    markers = worker_call("markers", text=text) or call("markers.py", [text, "--json"], 30)
     hits = (markers or {}).get("markers", [])
     # гейт по правилу навыка: классификатор запускается только на абзацах, где
     # сработали маркеры. Раньше этот файл не гейтился — цифры расходились с плагином.
     gated = bool(hits) and not a.no_gate
-    classifier = call("classifier.py", [text, "--json"] + (["--gated"] if gated else [])
-                      + ["--min", str(OPERATING_POINT)], 120)
+    classifier = worker_call("classify", text=text, min=OPERATING_POINT, gated=gated) or \
+        call("classifier.py", [text, "--json"] + (["--gated"] if gated else [])
+             + ["--min", str(OPERATING_POINT)], 120)
     # полный текст, кусками по 1500 символов: раньше этот файл опрашивал индекс только
     # по первым 1500, хотя плагин — по всему тексту до 4000. Замер на одном тексте:
     # полный запрос даёт «Ложная дилемма» (приём на позиции 3739), срез 1500 — нет.
     # Embedding-модель сама видит только ~512 токена, поэтому куски — единственный
     # способ достать устройства из хвоста длинного транскрипта.
-    rag = call("rag_query.py", [text, "--top-k", "6", "--chunk", "1500"], 120)
+    rag = worker_call("search", query=text,
+                      chunks=[text[i:i + 1500] for i in range(0, len(text), 1500)]) or \
+        call("rag_query.py", [text, "--top-k", "6", "--chunk", "1500"], 120)
 
     result: dict = {"status": "ok", "source": "transcript",
                     "paragraphs": len(paragraphs(text)), "gated": gated}
