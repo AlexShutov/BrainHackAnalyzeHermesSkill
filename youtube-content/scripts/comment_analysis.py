@@ -261,14 +261,13 @@ def analyze(rows, runner=None, device_by_text=None, use_neural=True, use_markers
     mood = {}
     for c in cats:
         mood[c] = mood.get(c, 0) + 1
-    n = len(cats) or 1
-    mood_pct = {c: round(100 * v / n) for c, v in sorted(mood.items(), key=lambda kv: -kv[1])}
+    mood_pct = CS.percentages(mood)
 
     cross = {}
     for r in rows:
         lex_cat, _ = CS.classify(r.get("text") or "")
         cross[lex_cat] = cross.get(lex_cat, 0) + 1
-    cross_pct = {c: round(100 * v / n) for c, v in sorted(cross.items(), key=lambda kv: -kv[1])}
+    cross_pct = CS.percentages(cross)
 
     tagged = []
     for i, r in enumerate(rows):

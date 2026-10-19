@@ -119,6 +119,28 @@ def build_threads(rows):
     return threads, by_id
 
 
+def percentages(counts):
+    """Проценты, которые обязаны суммироваться с самим доставляемым блоком.
+
+    Прежний `round()` по каждой категории: три равные категории дают 33+33+33=99 —
+    блок печатает распределение, которое не складывается в 100, и цифры противоречат
+    сами себе (правило: доставляемые числа — hard assertion). Метод наибольшего
+    остатка: floor по каждой категории, недостающие единицы — категориям с наибольшим
+    остатком (при равном остатке — по большему числу, затем по имени). Порядок вывода
+    остаётся прежним: по убыванию числа комментариев.
+    """
+    n = sum(counts.values())
+    if not n:
+        return {}
+    exact = {c: 100.0 * v / n for c, v in counts.items()}
+    base = {c: int(exact[c]) for c in counts}
+    missing = 100 - sum(base.values())
+    order = sorted(counts, key=lambda c: (-(exact[c] - base[c]), -counts[c], c))
+    for c in order[:missing]:
+        base[c] += 1
+    return {c: base[c] for c in sorted(counts, key=lambda c: (-counts[c], c))}
+
+
 def thread_homogeneity(threads, by_id):
     """Один тред = одна строка. overall — простое среднее по тредам (то, что
     доставляется в чат), weighted — среднее, взвешенное по размеру тредов."""

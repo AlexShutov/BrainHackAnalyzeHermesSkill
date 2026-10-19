@@ -1419,6 +1419,57 @@ class CommentAnalysisTests(SnapshotMixin, unittest.TestCase):
         self.assertEqual(tags[1], "🤮", "токсичность p>=0.70 обязана давать 🤮")
         self.assertEqual(tags[0], "😊")
 
+    def test_mood_percentages_sum_to_100(self):
+        """Доставляемые числа — hard assertion: распределение обязано складываться
+        в 100. Прежний `round()` по каждой категории на трёх равных категориях давал
+        33+33+33=99 — блок печатал распределение, которое противоречит само себе.
+        Проверка поведением: три комментария в трёх категориях, сумма процентов в
+        доставляемом блоке = 100; тот же кейс на прежнем round() обязан дать 99 —
+        иначе тест не доказывает разный результат. Кросс-проверка лексиконом (слой
+        neural) обязана считать тем же методом."""
+        import re
+        import comment_analysis as CA
+        import comment_sentiment as CS
+
+        def nums(line):
+            return [int(m) for m in re.findall(r"(\d+)%", line)]
+
+        # лексикон: три категории по одному комменту
+        lex_rows = [{"id": "1", "parent": "root", "author": "a",
+                     "text": "злая бешеная критика", "likes": 0},
+                    {"id": "2", "parent": "root", "author": "b",
+                     "text": "отличная работа, спасибо", "likes": 0},
+                    {"id": "3", "parent": "root", "author": "c",
+                     "text": "фу, не лучший", "likes": 0}]
+        res = CA.analyze(lex_rows, use_neural=False, use_markers=False)
+        line = CA.block(res).splitlines()[0]
+        self.assertEqual(sum(nums(line)), 100,
+                         f"блок печатает распределение, которое не складывается в 100: {line}")
+        # прежний путь на тех же подсчётах обязан давать 99 — кейс различает методы
+        counts = {}
+        for r in lex_rows:
+            cat, _ = CS.classify(r["text"])
+            counts[cat] = counts.get(cat, 0) + 1
+        old = sum(round(100 * v / len(lex_rows)) for v in counts.values())
+        self.assertEqual(old, 99, "кейс обязан различать прежний путь round()")
+        self.assertEqual(sum(CS.percentages(counts).values()), 100)
+
+        # нейро-слой: три метки в трёх корзинах — та же обязанность
+        def runner(texts, batch=32):
+            labels = ["joy", "anger", "disappointment"]
+            return {"emotion": [{l: 0.8} for l in labels],
+                    "toxicity": [{"non-toxic": 0.9} for _ in texts],
+                    "sarcasm": [{"neutral": 0.9} for _ in texts]}
+        res2 = CA.analyze(lex_rows, runner=runner, use_markers=False)
+        out2 = CA.block(res2)
+        mood_line = out2.splitlines()[0]
+        cross_line = [l for l in out2.splitlines() if l.startswith("Кросс-проверка")][0]
+        self.assertEqual(sum(nums(mood_line)), 100,
+                         f"нейро-распределение не складывается в 100: {mood_line}")
+        self.assertEqual(sum(nums(cross_line)), 100,
+                         f"кросс-проверка не складывается в 100: {cross_line}")
+
+
     def test_all_three_paths_use_the_same_entry_point(self):
         import comment_analysis as CA
         real = CA.neural_runner

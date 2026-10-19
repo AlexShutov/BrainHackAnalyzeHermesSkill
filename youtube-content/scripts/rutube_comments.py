@@ -82,7 +82,7 @@ def main():
                 print(f"{cat} {mood[cat]}%")
         shouty = sum(1 for row in rows if row["shouty"])
         print(f"эмоционально окрашенных (без нейтральных): "
-              f"{round(100 * (n - mood.get('нейтрально', 0)) / n)}%, из них «кричащих» {shouty}")
+              f"{100 - mood.get('нейтрально', 0)}%, из них «кричащих» {shouty}")
         print("\n=== Однородность ===")
         print(f"в среднем по тредам: {overall_hom}%" if overall_hom is not None else "тредов с ответами нет")
         if weighted_hom is not None and weighted_hom != overall_hom:

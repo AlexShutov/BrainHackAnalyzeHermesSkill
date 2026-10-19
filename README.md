@@ -1,5 +1,5 @@
 # Psychology analysis skill (installable on a clean Hermes)
-![License](https://img.shields.io/badge/license-MIT-blue) ![Python](https://img.shields.io/badge/python-3.10%2B-blue) ![Platform](https://img.shields.io/badge/platform-macos-lightgrey) ![Tests](https://img.shields.io/badge/tests-69%2F69-brightgreen)
+![License](https://img.shields.io/badge/license-MIT-blue) ![Python](https://img.shields.io/badge/python-3.10%2B-blue) ![Platform](https://img.shields.io/badge/platform-macos-lightgrey) ![Tests](https://img.shields.io/badge/tests-70%2F70-brightgreen)
 
 **Нейросетевой классификатор дообучен на классическом корпусе по пропаганде и манипуляциям** — база знаний построена на текстах:
 
@@ -242,7 +242,7 @@ plugin/psych-rag/                pre_gateway_dispatch hook (no core patch)
 /Users/alex/.hermes/tools/psych-rag-env/bin/python scripts/tests/test_layers.py
 ```
 
-69 tests, stdlib only, ONNX/HF не грузятся (модели подменяются фиксами). Текущий прогон: 69/69.
+70 tests, stdlib only, ONNX/HF не грузятся (модели подменяются фиксами). Текущий прогон: 70/70.
 
 ## Known issues (не починено)
 
@@ -250,7 +250,7 @@ plugin/psych-rag/                pre_gateway_dispatch hook (no core patch)
 
 - `NEURAL_BUCKET` — покрытие полное (28 меток); метка без корзины (пропуск в id2label) не смешивает слои молча: блок печатает, что число по этому комментату получил лексикон. `curiosity` → «нейтрально» (интерес без оценки — не stance, в однородности не считается).
 - `MARKETING` слишком широкий: «для вас», «осталось », «90%», «по ссылке» — бытовые фразы дают 💸. **Починено (П.14):** каждый приём — группа «триггер + обязательное окружение»; бытовая фраза без приёма не размечается, а доставляемый блок называет конкретный приём.
-- Проценты настроения через `round()`: на трёх категориях сумма 99, а не 100.
+- Проценты настроения через `round()`: на трёх категориях сумма 99, а не 100. **Починено (П.15):** метод наибольшего остатка (`comment_sentiment.percentages()`, одно определение для всех трёх путей); строка «эмоционально окрашенных» выводится из тех же процентов как 100 − нейтрально.
 - `cross_check` считается даже когда слой и есть лексикон — двойной проход по тому же словарю.
 - `neural_runner()` грузит модели на каждый вызов (тёплый worker есть только для плагина).
 - `version_check()` — сетевой запрос к hub на первое сообщение каждого чата стоит на пути входящего сообщения.
