@@ -583,6 +583,69 @@ class TestOpenBugs(unittest.TestCase):
                 s = read(os.path.join(SCRIPTS, f))
                 self.assertNotIn("json.load(open(", s, f"{f}: незакрытый open()")
 
+    def test_skill_dictionaries_have_no_latin_homoglyphs(self):
+        """Поведение: homoglyph внутри кириллического слова не даёт синтаксической ошибки —
+        слово просто никогда не совпадёт, и правило молча перестаёт работать. Тест вставляет
+        подмену и требует, чтобы сканер её нашёл: без этого проверка вырождается в «сейчас чисто».
+        """
+        def scan(text):
+            return [w for w in re.findall(r"[A-Za-zА-Яа-яё]+", text)
+                    if re.search(r"[а-яё]", w) and re.search(r"[A-Za-z]", w)]
+        planted = "злостnая"          # кириллическое слово с латинской n внутри
+        self.assertEqual(scan(planted), [planted], "сканер не ловит подмену — проверка бессмысленна")
+        self.assertEqual(scan("ok"), [], "латинское слово само по себе не подмена")
+
+        def words(obj, path=""):
+            """Словарные списки — вложенные dict/list: обходить рекурсивно и проверять
+            СЛОВО целиком, а не строку: «Levinson» в скобках — латинское имя, а не подмена."""
+            out = []
+            if isinstance(obj, dict):
+                for k, v in obj.items():
+                    out.extend(words(k, path) + words(v, path))
+            elif isinstance(obj, (list, tuple, set)):
+                for x in obj:
+                    out.extend(words(x, path))
+            else:
+                for w in re.findall(r"[A-Za-zА-Яа-яё]+", str(obj)):
+                    if re.search(r"[а-яё]", w) and re.search(r"[A-Za-z]", w):
+                        out.append((path, w))
+            return out
+
+        planted = "злостnая"          # кириллическое слово с латинской n внутри
+        self.assertEqual(words(planted, "planted"), [("planted", planted)],
+                         "сканер не ловит подмену — проверка бессмысленна")
+        self.assertEqual(words("Levinson 1983", "name"), [],
+                         "латинское имя в скобках — не подмена")
+
+        sources = {"comment_sentiment": (comment_sentiment.ANGER, comment_sentiment.JOY,
+                                         comment_sentiment.DISCONTENT, comment_sentiment.NEG,
+                                         comment_sentiment.CATS),
+                   "ukr_detect": (ukr.UK_WORDS, ukr.BE_WORDS, ukr.AMBIG, ukr.WEAK,
+                                  ukr.SHARED_UK_BE, ukr.UK_LETTERS, ukr.BE_ONLY),
+                   "markers": (markers.MARKERS, markers.STOP, markers.MAP,
+                               markers.FAMILIES, markers.NAMES)}
+        bad = []
+        for name, objs in sources.items():
+            for obj in objs:
+                bad.extend(words(obj, name))
+        self.assertEqual(bad, [], "словарный список содержит латинскую букву внутри кириллического слова: "
+                                  + "; ".join(f"{p}: {w}" for p, w in bad))
+
+    def test_homoglyph_in_dictionary_breaks_routing_and_is_caught(self):
+        """Поведение: homoglyph в словаре — не синтаксическая ошибка, а молчаливый пропуск
+        правила. Семья «номинализация и удаление агента» была написана с латинской n
+        («номinalizация»), и `NLP_FAMILY_MARKS` («номинализаци») её не видела: hit в этой
+        семье не давал подтипа вообще — None вместо 🔪🧠. Тест берёт имя семьи из самого
+        markers.json и прогоняет его через routing, а не пишет имя сам."""
+        p = os.path.join(SKILL, "psychology", "markers.json")
+        with open(p, encoding="utf-8") as f:
+            fams = json.load(f)["families"]
+        fam = [k for k in fams if "номинализ" in k.lower()]
+        self.assertTrue(fam, "в markers.json нет семьи номинализации — тест не о чём")
+        self.assertEqual(TR.pair_for_family(fam[0]), "🔪🧠",
+                         f"имя семьи {fam[0]!r} не совпадает с NLP_FAMILY_MARKS — подтип теряется")
+        self.assertEqual(markers.unmapped_families(), [], "MAP и markers.json разошлись")
+
     def test_status_post_argv_guard(self):
         """Поведение: неполная команда даёт usage, а не IndexError."""
         argv, sys.argv = sys.argv, ["status_post.py", "start", "1"]
