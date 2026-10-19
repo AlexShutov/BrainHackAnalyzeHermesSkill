@@ -63,8 +63,21 @@ def ensure_fts(con):
     не находилось никогда. Колонка label с весом 2.0 — это recall для таких запросов.
 
     Индекс строится в пути построения (там есть право на запись); запросная часть
-    работает по нему через mode=ro."""
+    работает по нему через mode=ro.
+
+    Триггеры обязательны: без внешней записи FTS5 синхронизируется только полным
+    rebuild. Путь построения его делает, но любой другой писатель (обогащение корпуса,
+    ручной INSERT в docs) оставался невидимым для лексической половины молча — запрос
+    по такому документу возвращал пустой список, и это выглядело как «устройства нет».
+    """
     con.execute("CREATE VIRTUAL TABLE IF NOT EXISTS docs_fts USING fts5(label, text, content='docs', content_rowid='id')")
+    con.execute("""CREATE TRIGGER IF NOT EXISTS docs_fts_ai AFTER INSERT ON docs BEGIN
+        INSERT INTO docs_fts(rowid, label, text) VALUES (new.id, new.label, new.text); END""")
+    con.execute("""CREATE TRIGGER IF NOT EXISTS docs_fts_ad AFTER DELETE ON docs BEGIN
+        INSERT INTO docs_fts(docs_fts, rowid, label, text) VALUES ('delete', old.id, old.label, old.text); END""")
+    con.execute("""CREATE TRIGGER IF NOT EXISTS docs_fts_au AFTER UPDATE ON docs BEGIN
+        INSERT INTO docs_fts(docs_fts, rowid, label, text) VALUES ('delete', old.id, old.label, old.text);
+        INSERT INTO docs_fts(rowid, label, text) VALUES (new.id, new.label, new.text); END""")
 
 
 def fts_ready(con):

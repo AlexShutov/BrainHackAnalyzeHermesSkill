@@ -24,11 +24,43 @@ if [ -z "$PYBIN" ]; then
   exit 1
 fi
 
+PKGS="numpy onnxruntime tokenizers huggingface_hub requests fastembed pypdf cryptography"
+
+# DRY_RUN=1 — offline режим для проверки чистой установки: печатает план (pip и загрузка
+# моделей — сетевые шаги, их нельзя проверить без сети) и выполняет только локальные шаги
+# (каталог плагина и его файлы). Без этого навык был непроверяем на fresh-инсталле:
+# тест вынужден был проверять текст исходника и проходил, когда логика сломана.
+if [ "${DRY_RUN:-0}" = "1" ]; then
+  echo "DRY RUN — план установки (сеть не трогается, пишутся только локальные файлы)"
+  echo "1/4 venv: $VENV (python $PYBIN)"
+  echo "  would pip install: $PKGS"
+  echo "  would pip install (export-time): torch transformers onnx"
+  echo "2/4 weights: would download + convert to ONNX int8 (model_setup.py) — сетевой шаг"
+  echo "3/4 RAG index: would build from devices.json only (books absent) — сетевой шаг при embedding"
+  echo "4/4 plugin"
+  mkdir -p "$HERMES_HOME/plugins/psych-rag"
+  cp "$SKILL/plugin/psych-rag/__init__.py" "$SKILL/plugin/psych-rag/plugin.yaml" "$HERMES_HOME/plugins/psych-rag/"
+  echo "  copied plugin into: $HERMES_HOME/plugins/psych-rag"
+  cat <<EOF
+
+Add the MCP server to config.yaml:
+
+  mcp_servers:
+    psychology-rag:
+      command: $VENV/bin/python
+      args: ["$SKILL/scripts/rag_mcp.py"]
+      enabled: true
+
+then restart Hermes (plugins and MCP load at startup).
+EOF
+  exit 0
+fi
+
 echo "1/4 venv: $VENV (python $PYBIN)"
 if [ ! -x "$VENV/bin/python" ]; then
   "$PYBIN" -m venv "$VENV"
 fi
-"$VENV/bin/pip" install --quiet numpy onnxruntime tokenizers huggingface_hub requests fastembed pypdf cryptography
+"$VENV/bin/pip" install --quiet $PKGS
 # torch + onnx are export-time dependencies only — the runtime path never imports them.
 # Skip them with SKIP_TORCH=1 if already installed or if the model ships an ONNX export.
 if [ "${SKIP_TORCH:-0}" != "1" ]; then

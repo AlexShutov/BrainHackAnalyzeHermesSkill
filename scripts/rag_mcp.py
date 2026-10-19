@@ -2,12 +2,13 @@
 """MCP stdio server for the psychology RAG: one tool, `psychology_search`.
 
 Long-lived process: the embedding model is loaded once (~0.5 s warm), then each
-call is ~5-20 ms. Hermes config:
+call is ~5-20 ms. Hermes config (paths are per-machine — setup.sh prints them, the
+skill must not hardcode the author's home):
 
   mcp_servers:
     psychology-rag:
-      command: /Users/alex/.hermes/tools/psych-rag-env/bin/python
-      args: ["/Users/alex/.hermes/skills/brain-hack-analyze/scripts/rag_mcp.py"]
+      command: $HERMES_HOME/tools/psych-rag-env/bin/python
+      args: ["$HERMES_HOME/skills/brain-hack-analyze/scripts/rag_mcp.py"]
       enabled: true
 
 BM25-only fallback if ONNX cannot load — the tool still answers, lexical only.

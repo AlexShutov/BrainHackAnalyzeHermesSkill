@@ -35,20 +35,16 @@ for p in list(scripts.glob("*.py")) + list((clone / "plugin/psych-rag").glob("*.
         bad.append(f"{p.name}: {m.group(0)}")
 check("no hardcoded author paths", not bad, "; ".join(bad[:3]))
 
-# 3. setup.sh with mock pip: venv path from HERMES_HOME, plugin copied there
-stub = pathlib.Path(tmp) / "stubpip"
-piplog = pathlib.Path(tmp) / "piplog"
-stub.write_text("#!/bin/sh\necho 'MOCK PIP: ' \"$@\" >> " + str(piplog) + "\nexit 0\n")
-stub.chmod(0o755)
-env = dict(os.environ, HERMES_HOME=str(home),
-           PATH=str(stub.parent) + os.pathsep + os.environ["PATH"], SKIP_TORCH="1")
+# 3. setup.sh in DRY_RUN (offline): plan printed, plugin copied into the fresh HOME
+env = dict(os.environ, HERMES_HOME=str(home), DRY_RUN="1")
 r = subprocess.run(["bash", str(clone / "scripts/setup.sh")], capture_output=True, text=True, env=env, timeout=120)
 out = r.stdout + r.stderr
-check("setup.sh runs offline with mock pip", r.returncode == 0, (r.stderr.strip()[:150]))
+check("setup.sh runs offline in DRY_RUN", r.returncode == 0, (r.stderr.strip()[:150]))
 check("venv path derived from HERMES_HOME", str(home / "tools/psych-rag-env") in out, out[:120])
+check("install plan printed (network steps named as plan)",
+      "would pip install" in out and "fastembed" in out and "would download" in out, out[:160].replace("\n", " "))
 check("plugin copied into the fresh HOME", (home / "plugins/psych-rag/__init__.py").exists())
 check("config snippet uses generic paths, not the author's", "/Users/" not in out, out[-160:].replace("\n", " "))
-check("mock pip recorded the install plan", piplog.exists() and "fastembed" in piplog.read_text(), "")
 
 # 4. devices-only index in the clean copy via the BM25 fallback (no models, no network)
 sys.path.insert(0, str(scripts))
@@ -71,6 +67,17 @@ r = subprocess.run([PY, str(scripts / "rag_query.py"), "ложная дилем�
                    capture_output=True, text=True, timeout=60)
 check("BM25 fallback query works on the clean copy", r.returncode == 0 and "Ложная дилемма" in r.stdout,
       (r.stdout or r.stderr)[:140].replace("\n", " "))
+
+# 4b. classifier on the clean copy: models are NOT in the repo (model_setup.py creates them).
+# Прежний модуль читал labels.txt/thresholds.npy на импорте — навык не деградировал к
+# лексикону, а падал целиком (импорт classifier нужен тестам и worker).
+import classifier as C
+check("classifier imports on the clean copy without models",
+      C.LABELS is None and C.THRESH is None,
+      f"LABELS present={C.LABELS is not None}, THRESH present={C.THRESH is not None}")
+cres = C.classify("мы все знаем, что это правда")
+check("classifier answers unavailable on the clean copy",
+      isinstance(cres, dict) and cres.get("unavailable"), str(cres)[:120])
 
 # 5. warm worker protocol on the clean copy (no models)
 env2 = dict(os.environ, PSYCH_WORKER_NO_MODELS="1", PSYCH_WORKER_IDLE="5")

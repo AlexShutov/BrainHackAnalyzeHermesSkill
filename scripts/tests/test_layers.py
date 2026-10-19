@@ -853,6 +853,31 @@ class TestOpenBugs(SnapshotMixin, unittest.TestCase):
                 self.assertFalse(bad, f"{os.path.relpath(os.path.join(base, f), SKILL)}: "
                                       f"незакрытый open() — {bad[:2]}")
 
+    def test_fts_triggers_index_later_inserts(self):
+        """Поведение: FTS5 с content='docs' синхронизируется полным rebuild или триггерами.
+        Прежний ensure_fts не создавал триггеров: документ, добавленный после построения
+        (обогащение корпуса, ручной INSERT), был невидим для лексической половины — запрос
+        по нему возвращал пустой список, и это выглядело как «устройства нет».
+        """
+        db = os.path.join(tempfile.mkdtemp(), "index.db")
+        orig = R.DB_PATH
+        R.DB_PATH = db
+        try:
+            con = R.open_db(readonly=False)
+            R.ensure_fts(con)
+            con.execute("INSERT INTO docs(kind,label,text) VALUES"
+                        "('device','Ложная дилемма','Ложная дилемма: выбор из двух')")
+            con.commit()
+            hits = R.bm25_scores(con, "ложная дилемма")
+            self.assertTrue(hits, "триггер не индексирует поздний INSERT — запрос по нему пустой")
+            con.execute("DELETE FROM docs WHERE id=1")
+            con.commit()
+            self.assertFalse(R.bm25_scores(con, "ложная дилемма"),
+                             "триггер на удаление не работает: мёртвый документ остаётся в индексе")
+            con.close()
+        finally:
+            R.DB_PATH = orig
+
     def test_state_dir_created_on_first_run(self):
         """Чистая установка: каталога rag/ ещё нет — прежний open_db падал с
         'unable to open database file' (база не создавалась вообще). Фикс создаёт

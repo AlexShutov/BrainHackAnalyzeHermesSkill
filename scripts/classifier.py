@@ -27,8 +27,20 @@ MODELS = os.path.join(os.path.dirname(HERE), "psychology", "models")
 ONNX = os.path.join(MODELS, "classifier_int8.onnx")
 TOKENIZER = os.path.join(MODELS, "tokenizer.json")
 STATE = os.path.join(MODELS, "update_state.json")
-LABELS = [l.strip() for l in read_lines(os.path.join(MODELS, "labels.txt"))]
-THRESH = np.load(os.path.join(MODELS, "thresholds.npy"))
+
+# Чистая установка: labels.txt / thresholds.npy / onnx создаёт model_setup.py, в репо их нет.
+# Прежний модуль читал их на импорте и падал с FileNotFoundError — то есть навык не
+# деградировал к лексикону, а ломался целиком (импорт classifier — часть тестов и worker).
+def _labels():
+    p = os.path.join(MODELS, "labels.txt")
+    return [l.strip() for l in read_lines(p)] if os.path.exists(p) else None
+
+def _thresh():
+    p = os.path.join(MODELS, "thresholds.npy")
+    return np.load(p) if os.path.exists(p) else None
+
+LABELS = _labels()
+THRESH = _thresh()
 with open(os.path.join(os.path.dirname(HERE), "psychology", "taxonomy_map.json"), encoding="utf-8") as _f:
     TAXONOMY = json.load(_f)["labels"]
 MAX_TOKENS = 256
@@ -69,7 +81,13 @@ def classify(text, min_conf=None):
     отдельным абзацем -> Doubt 0.704). Теперь каждый кусок проходит отдельно, и по
     каждому метке берётся максимальная вероятность между кусками — порог thresholds.npy
     применяется к этому максимуму.
+
+    Чистая установка (модели ещё не скачаны) — честный `unavailable`, а не падение на
+    импорте: навык обязан деградировать к лексикону, а не ломаться целиком.
     """
+    if LABELS is None or THRESH is None or not os.path.exists(ONNX) or not os.path.exists(TOKENIZER):
+        return {"unavailable": "модель не установлена: нет labels.txt / thresholds.npy / onnx "
+                               "— выполни scripts/setup.sh"}
     tok = tokenizer()
     enc = tok.encode(text, add_special_tokens=True)
     ids_all, mask_all = enc.ids, enc.attention_mask
