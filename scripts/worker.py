@@ -13,6 +13,8 @@ JSON-lines по stdin/stdout.
   {"op":"search","query":text,"chunks":[...]}          -> {"ok":true,"results":[...]}
   {"op":"markers","text":...}                          -> {"ok":true,"markers":[...]}
   {"op":"classify","text":...,"min":0.70,"gated":true} -> {"ok":true,"classification":[...]}
+  {"op":"neural","texts":[...],"models":["emotion","toxicity","sarcasm"],"batch":32}
+                                                       -> {"ok":true,"scores":{name:[...]}}
 
 PSYCH_WORKER_NO_MODELS=1 — не грузить модели: поиск только лексический, классификатор
 пустой. Это режим тестов и деградации, когда ONNX/fastembed недоступны.
@@ -48,12 +50,46 @@ def load_classifier():
         return None
 
 
+NEURAL_MODELS = ("emotion", "toxicity", "sarcasm")
+
+
+def neural_paths():
+    """Дом neural_pass — youtube-content/scripts. Отдельная функция, потому что путь
+    обязан быть проверяемым: без него импорт падает, worker отвечает «neural
+    unavailable», и путь комментариев молча возвращается к загрузке моделей в каждом
+    процессе — ровно тот баг, который тест ловит."""
+    skill_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    return os.path.join(skill_dir, "youtube-content", "scripts")
+
+
+def load_neural():
+    """HF-модели нейро-прохода комментариев — загружаются ОДИН раз на живой процесс
+    worker и лениво, на первом запросе `neural`: иначе старт worker платит загрузку
+    rubert для тех, кто нейро-слой не просит. Правило навыка: warm worker — один на
+    хозяина, и через него обязаны ходить ВСЕ пути, а не только плагин."""
+    if NO_MODELS:
+        return None
+    try:
+        sys.path.insert(0, neural_paths())
+        import neural_pass as NP
+        from transformers import AutoTokenizer
+        loaded = {}
+        for name in NEURAL_MODELS:
+            tok = AutoTokenizer.from_pretrained(NP.REPOS[name])
+            model, labels = NP.load_no_mmap(NP.REPOS[name])
+            loaded[name] = (tok, model, labels, NP.MULTILABEL[name])
+        return loaded
+    except Exception:
+        return None
+
+
 def main():
     t0 = time.time()
     con = R.open_db()
     emb = load_embedding()
     cls = load_classifier()
     matrix = None
+    neural = None
 
     def cached_matrix():
         nonlocal matrix
@@ -108,6 +144,27 @@ def main():
                 emit({"ok": True, "classification": res})
             else:
                 emit({"ok": True, "classification": cls.classify(text, min_conf=minp)})
+        elif op == "neural":
+            if NO_MODELS:
+                emit({"ok": False, "error": "no models"})
+                continue
+            if neural is None:
+                neural = load_neural()
+            if not neural:
+                emit({"ok": False, "error": "neural unavailable"})
+                continue
+            import neural_pass as NP
+            texts = req.get("texts") or []
+            models = req.get("models") or list(NEURAL_MODELS)
+            batch = int(req.get("batch") or NP.BATCH)
+            out = {}
+            for name in models:
+                if name not in neural:
+                    continue
+                tok, model, labels, multi = neural[name]
+                out[name] = [row["all"] for row in
+                             NP.infer(tok, model, labels, texts, multi, name, batch)]
+            emit({"ok": True, "scores": out, "loaded_once": True})
         else:
             emit({"ok": False, "error": f"unknown op: {op}"})
     con.close()

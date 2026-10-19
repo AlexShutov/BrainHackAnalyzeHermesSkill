@@ -16,7 +16,22 @@ import json, os, select, subprocess, sys
 
 SKILL_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 WORKER = os.path.join(SKILL_DIR, "scripts", "worker.py")
-DEFAULT_PY = os.environ.get("PSYCH_RAG_PY") or sys.executable
+VENV_PY = os.path.expanduser("~/.hermes/tools/psych-rag-env/bin/python")
+
+
+def resolve_python():
+    """Интерпретатор для worker. Путь комментариев может идти под системным python3
+    (на этой машине — 3.9 без transformers), а worker обязан запускаться там, где модели
+    есть: иначе load_neural падает, worker отвечает «neural unavailable», и анализ молча
+    деградирует к лексикону — ровно это произошло при живой проверке, пока клиент брал
+    sys.executable."""
+    env = os.environ.get("PSYCH_RAG_PY")
+    if env:
+        return env
+    return VENV_PY if os.path.exists(VENV_PY) else sys.executable
+
+
+DEFAULT_PY = resolve_python()
 TIMEOUT = int(os.environ.get("PSYCH_WORKER_TIMEOUT", "15"))
 
 

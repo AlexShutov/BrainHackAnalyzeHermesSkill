@@ -1332,7 +1332,55 @@ class WorkerTests(SnapshotMixin, unittest.TestCase):
         self.assertTrue(r and r.get("classification") == [], "classify без модели обязан вернуть пустой список")
         r = c.call("bogus")
         self.assertTrue(r and not r.get("ok") and r.get("error"), "неизвестный op молча проходит")
+        r = c.call("neural", texts=["текст"])
+        self.assertTrue(r and not r.get("ok") and r.get("error") == "no models",
+                        "op `neural` в протоколе отсутствует: worker отвечает unknown op, "
+                        "и путь комментариев не может ходить через тёплый worker")
         c.stop()
+
+    def test_client_defaults_to_the_interpreter_that_has_the_models(self):
+        """guard-проверка: worker обязан запускаться интерпретатором, где модели есть.
+        Путь комментариев может идти под системным python3 (на этой машине — 3.9 без
+        transformers), и клиент брал sys.executable: load_neural падал, worker отвечал
+        «neural unavailable», и анализ молча деградирует к лексикону — читатель видел
+        числа словаря, не зная, что warm-путь был. Ограничение: тесты идут под venv,
+        поэтому там venv и sys.executable совпадают, и разница видна только в ветке env;
+        живой proof — прогон под системным python3 (он и поймал баг)."""
+        import worker_client as wc
+        old = os.environ.get("PSYCH_RAG_PY")
+        try:
+            os.environ["PSYCH_RAG_PY"] = "/bin/false-python"
+            self.assertEqual(wc.resolve_python(), "/bin/false-python",
+                             "env обязан перебивать venv")
+            os.environ.pop("PSYCH_RAG_PY")
+            if not os.path.exists(wc.VENV_PY):
+                self.skipTest("venv с моделями не установлен — проверка не о чём")
+            self.assertEqual(wc.resolve_python(), wc.VENV_PY,
+                             "без env клиент обязан брать venv, а не sys.executable")
+        finally:
+            if old is not None:
+                os.environ["PSYCH_RAG_PY"] = old
+
+    def test_worker_sees_neural_pass_from_the_comment_path(self):
+        """guard-проверка пути импорта: neural_pass живёт в youtube-content/scripts, а
+        worker — в scripts/. Без правильного пути импорт падает, worker отвечает «neural
+        unavailable», и путь комментариев молча возвращается к загрузке моделей в каждом
+        процессе — ровно тот баг, который тест ловит. Живой замер (2026-10-19): первый
+        запрос через worker 10.8 с (ленивая загрузка трёх моделей), каждый следующий
+        0.04 с; прежний путь платил загрузку на каждый анализ."""
+        import worker as W
+        p = W.neural_paths()
+        target = os.path.join(p, "neural_pass.py")
+        self.assertTrue(os.path.exists(target),
+                        "путь worker не указывает на модуль нейро-прохода")
+        sys.path.insert(0, p)
+        try:
+            import neural_pass as NP
+            self.assertEqual(os.path.abspath(NP.__file__), target,
+                             "worker импортирует другой модуль")
+        finally:
+            sys.path.remove(p)
+            sys.modules.pop("neural_pass", None)
 
     def test_client_restarts_after_process_death(self):
         import signal
@@ -1504,6 +1552,58 @@ class CommentAnalysisTests(SnapshotMixin, unittest.TestCase):
             self.assertIn("Кросс-проверка", CA.block(res2))
         finally:
             CS.classify = real
+
+    def test_comment_path_goes_through_the_warm_worker_and_loads_once(self):
+        """Правило: тёплый worker — один живой процесс на хозяина, и через него обязаны
+        ходить ВСЕ пути. Раньше это выполнялось только для плагина: путь комментариев
+        грузил три модели на каждый вызов — каждый анализ (каждый запуск скрипта —
+        отдельный процесс) платил загрузку rubert заново. Проверка поведением: на
+        worker-пути загрузка в процессе не вызывается вообще; когда worker не отвечает —
+        один запасной путь, и модели загружаются ОДИН раз на все прогоны."""
+        import comment_analysis as CA
+        import worker_client as WC
+        import neural_pass as NP
+        real_client, real_infer = WC.client, NP.infer
+        calls, loads = [], []
+
+        class FakeClient:
+            def call(self, op, **kw):
+                calls.append(op)
+                return {"ok": True, "scores": {n: [{n: 0.5}] for n in kw.get("models", [])}}
+
+        class DeadClient:
+            def call(self, op, **kw):
+                return None
+
+        def fake_loader(models):
+            loads.append(tuple(models))
+            return {m: (None, None, [m], False) for m in models}
+
+        def fake_infer(tok, model, labels, texts, multi, name, batch):
+            return [{"all": {labels[0]: 0.5}} for _ in texts]
+
+        WC.client = lambda python=None: FakeClient()
+        NP.infer = fake_infer
+        try:
+            runner = CA.neural_runner(loader=fake_loader)
+            self.assertIsNotNone(runner, "путь комментариев не использует тёплый worker")
+            runner(["текст1"])
+            runner(["текст2"])
+            self.assertEqual(calls, ["neural", "neural", "neural"],
+                             "прогон прошёл не через worker")
+            self.assertEqual(loads, [], "worker-путь грузит модели в своём процессе")
+            # деградация: worker не поднялся — запасной путь, загрузка один раз
+            calls.clear()
+            loads.clear()
+            runner2 = CA.neural_runner(client=DeadClient(), loader=fake_loader)
+            self.assertIsNotNone(runner2, "нет запасного пути, когда worker не поднялся")
+            runner2(["текст3"])
+            runner2(["текст4"])
+            self.assertEqual(loads, [tuple(CA.NEURAL_MODELS)],
+                             "модели грузятся на каждый прогон, а не один раз")
+        finally:
+            WC.client = real_client
+            NP.infer = real_infer
 
 
 

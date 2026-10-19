@@ -129,12 +129,13 @@ def marketing_device(text):
 PRIORITY = ["💸", "приём", "☠️", "🤮", "🤢", "🔴", "😊", "🙂"]
 
 
-def neural_runner(models=("emotion", "toxicity", "sarcasm")):
-    """Тёплый нейро-прогон: модели загружаются один раз, батч по 32.
-    Возвращает None, если слой недоступен — вызывающий честно идёт лексиконом."""
+NEURAL_MODELS = ("emotion", "toxicity", "sarcasm")
+
+
+def load_models(models=NEURAL_MODELS):
+    """Загрузка моделей в процессе — запасной путь, когда тёплый worker не поднялся."""
     try:
         import neural_pass as NP
-        import torch
         from transformers import AutoTokenizer
     except Exception:
         return None
@@ -144,19 +145,54 @@ def neural_runner(models=("emotion", "toxicity", "sarcasm")):
             tok = AutoTokenizer.from_pretrained(NP.REPOS[name])
             model, labels = NP.load_no_mmap(NP.REPOS[name])
             loaded[name] = (tok, model, labels, NP.MULTILABEL[name])
+        return loaded
     except Exception:
         return None
 
-    def run(texts, batch=NP.BATCH):
-        # один источник цикла батча — NP.infer: иначе правило «пачки по 32» живёт
-        # в двух местах и выполняется только на одном пути
+
+def neural_runner(models=NEURAL_MODELS, client=None, loader=None):
+    """Тёплый нейро-прогон: модели загружаются ОДИН раз, батч по 32.
+
+    Правило навыка: тёплый worker — один живой процесс на хозяина, и через него обязаны
+    ходить ВСЕ пути. Раньше это выполнялось только для плагина: путь комментариев
+    загружал три модели на каждый вызов, то есть каждый анализ (каждый запуск скрипта —
+    отдельный процесс) платил загрузку rubert заново. Теперь путь идёт через тот же
+    worker (op `neural`), а загрузка в процессе остаётся запасным путём — деградация,
+    а не отказ анализа. Возвращает None, если слой недоступен: вызывающий честно
+    работает лексиконом и говорит об этом в доставляемом блоке.
+    """
+    loader = loader or load_models
+    loaded = None
+
+    def local_run(texts, batch=32):
+        nonlocal loaded
+        if loaded is None:
+            loaded = loader(models)
+        if not loaded:
+            return None
+        import neural_pass as NP
         out = {name: [] for name in loaded}
         for name, (tok, model, labels, multi) in loaded.items():
             for row in NP.infer(tok, model, labels, texts, multi, name, batch):
                 out[name].append(row["all"])
         return out
 
-    return run
+    def warm_run(texts, batch=32):
+        r = c.call("neural", texts=list(texts), models=list(models), batch=batch)
+        if r and r.get("ok"):
+            return r["scores"]
+        return local_run(texts, batch)      # worker умер — деградация, не отказ
+
+    try:
+        import worker_client
+        c = client or worker_client.client()
+        warm = c.call("neural", texts=["прогрев"], models=list(models))
+        if warm and warm.get("ok"):
+            return warm_run
+    except Exception:
+        pass
+    loaded = loader(models)          # один раз, и тот же кэш использует local_run
+    return local_run if loaded else None
 
 
 def device_pairs(text):

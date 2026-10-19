@@ -1,5 +1,5 @@
 # Psychology analysis skill (installable on a clean Hermes)
-![License](https://img.shields.io/badge/license-MIT-blue) ![Python](https://img.shields.io/badge/python-3.10%2B-blue) ![Platform](https://img.shields.io/badge/platform-macos-lightgrey) ![Tests](https://img.shields.io/badge/tests-71%2F71-brightgreen)
+![License](https://img.shields.io/badge/license-MIT-blue) ![Python](https://img.shields.io/badge/python-3.10%2B-blue) ![Platform](https://img.shields.io/badge/platform-macos-lightgrey) ![Tests](https://img.shields.io/badge/tests-74%2F74-brightgreen)
 
 **Нейросетевой классификатор дообучен на классическом корпусе по пропаганде и манипуляциям** — база знаний построена на текстах:
 
@@ -242,7 +242,7 @@ plugin/psych-rag/                pre_gateway_dispatch hook (no core patch)
 /Users/alex/.hermes/tools/psych-rag-env/bin/python scripts/tests/test_layers.py
 ```
 
-71 tests, stdlib only, ONNX/HF не грузятся (модели подменяются фиксами). Текущий прогон: 71/71.
+74 tests, stdlib only, ONNX/HF не грузятся (модели подменяются фиксами). Текущий прогон: 74/74.
 
 ## Known issues (не починено)
 
@@ -252,6 +252,6 @@ plugin/psych-rag/                pre_gateway_dispatch hook (no core patch)
 - `MARKETING` слишком широкий: «для вас», «осталось », «90%», «по ссылке» — бытовые фразы дают 💸. **Починено (П.14):** каждый приём — группа «триггер + обязательное окружение»; бытовая фраза без приёма не размечается, а доставляемый блок называет конкретный приём.
 - Проценты настроения через `round()`: на трёх категориях сумма 99, а не 100. **Починено (П.15):** метод наибольшего остатка (`comment_sentiment.percentages()`, одно определение для всех трёх путей); строка «эмоционально окрашенных» выводится из тех же процентов как 100 − нейтрально.
 - `cross_check` считается даже когда слой и есть лексикон — двойной проход по тому же словарю. **Починено (П.16):** сверка существует только когда числа дал нейро-слой; лексикон вызывается на комментарий только когда он нужен (метка модели без корзины или нет моделей), блок не печатает строку сверки, которой не было.
-- `neural_runner()` грузит модели на каждый вызов (тёплый worker есть только для плагина).
+- `neural_runner()` грузит модели на каждый вызов (тёплый worker есть только для плагина). **Починено (П.17):** у worker есть op `neural`, путь комментариев ходит через него, загрузка в процессе — только запасной путь; модели загружаются лениво на первом запросе. Замер: первый запрос 10.8 с, каждый следующий 0.04 с.
 - `version_check()` — сетевой запрос к hub на первое сообщение каждого чата стоит на пути входящего сообщения.
 - Комментарии YouTube: текст требует авторизованной сессии. Анонимный innertube отдаёт ключевые `commentViewModel` без текста (`frameworkUpdates` пуст) — секция пуста даже в реальном браузере на видео с 1,2 млн комментариев. Профиль отладочного Chrome анонимный (нет `SID`/`HSID`/`SSID`/`LOGIN_INFO`). Второй блокер — JS-челлендж: нужен deno или node с `--remote-components ejs:github`; с куками пользователя info-путь решает челлендж, но continuation комментариев остаётся пустым, пока в профиле нет входа. Пустой блок комментариев на большом видео — гейт авторизации, а не «комментариев нет».
