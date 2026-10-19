@@ -151,6 +151,22 @@ def thread_homogeneity(threads, by_id):
     return thread_lines, overall, weighted
 
 
+def format_text(res, rows):
+    """Доставляемая форма текста — без ников и без цитат комментариев (правило
+    пользователя, 2026-10-18). Раньше main() печатал по каждому треду
+    `@author «первые слова…»`: это тот вывод, который агент копирует в чат,
+    и он противоречил правилу. Формат берётся из общего модуля `comment_analysis.block()`,
+    поэтому все три пути (YouTube / Rutube / Telegram) доставляют одну и ту же форму.
+    Статистика по «кричащим» остаётся — она не содержит текста комментария."""
+    import comment_analysis as CA
+    out = [CA.block(res)]
+    shouty = sum(1 for row in rows if row.get("shouty"))
+    if shouty:
+        out.append(f"эмоционально окрашенных (без нейтральных): "
+                   f"{100 - res['mood'].get('нейтрально', 0)}%, из них «кричащих» {shouty}")
+    return "\n".join(out)
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("url")
@@ -202,23 +218,7 @@ def main():
                           "homogeneity_weighted": weighted_hom,
                           "threads": thread_lines}, ensure_ascii=False))
     else:
-        print(f"=== Настроение комментариев ({n}) ===")
-        for cat in ["злость", "радость", "недовольство", "нейтрально"]:
-            if cat in mood:
-                print(f"{cat} {mood[cat]}%")
-        shouty = sum(1 for row in rows if row["shouty"])
-        print(f"эмоционально окрашенных (без нейтральных): {100 - mood.get('нейтрально', 0)}%, из них «кричащих» {shouty}")
-        print(f"\n=== Однородность ===")
-        print(f"в среднем по тредам: {overall_hom}%" if overall_hom is not None else "тредов с ответами нет")
-        if weighted_hom is not None and weighted_hom != overall_hom:
-            print(f"взвешенная по размеру тредов: {weighted_hom}%")
-        if thread_lines:
-            print("по тредам (≥2 комментариев):")
-            for t in sorted(thread_lines, key=lambda x: -x["size"]):
-                if t["homogeneity"] is None:
-                    print(f"  {t['author']} «{t['thread']}…» — не измеряется (нейтральный тред, {t['size']})")
-                else:
-                    print(f"  {t['author']} «{t['thread']}…» — однородность в треде {t['homogeneity']}% ({t['size']}, доминирует {t['dominant']})")
+        print(format_text(res, rows))
 
 if __name__ == "__main__":
     main()

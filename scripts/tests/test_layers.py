@@ -882,6 +882,25 @@ class CommentAnalysisTests(unittest.TestCase):
         self.assertEqual(res["threads"][0]["homogeneity"], 67)
         self.assertEqual(res["overall"], 67)
 
+    def test_comment_sentiment_text_output_has_no_nicknames(self):
+        """Правило доставки (2026-10-18): блок комментариев — без ников и без цитат.
+        Раньше текстовый вывод `comment_sentiment.py` печатал `@author «первые слова…»`
+        по каждому треду — это тот вывод, который агент копирует в чат. Тест без сети:
+        fake-строки подаются напрямую в форму вывода."""
+        import comment_sentiment as CS
+        rows = [{"id": "R1", "author": "Вася", "text": "злая бешеная критика без фактов",
+                 "parent": "root", "likes": 0, "cat": "злость", "shouty": True},
+                {"id": "R1.1", "author": "Петя", "text": "злая бешеная критика",
+                 "parent": "R1", "likes": 0, "cat": "злость", "shouty": True}]
+        res = CA.analyze(rows, use_neural=False, use_markers=False)
+        out = CS.format_text(res, rows)
+        for nick in ("Вася", "Петя"):
+            self.assertNotIn(nick, out, f"ник {nick} попал в доставляемый вывод")
+        self.assertNotIn("злая бешеная критика", out, "цитата комментария в доставляемом выводе")
+        self.assertIn("злость 100%", out, "распределение по всем комментариям пропало")
+        self.assertIn("однородность", out.lower(), "сводка по тредам пропала")
+        self.assertIn("кричащих", out, "статистика по кричащим потерялась вместе с никами")
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

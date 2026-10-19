@@ -192,6 +192,7 @@ plugin/psych-rag/                pre_gateway_dispatch hook (no core patch)
 - **RAG видел только начало текста** — embedding-модель сама видит ~512 токена; retrieval опрашивается кусками по 1500 символов (проверено: полный запрос находит «Ложную дилемму» на позиции 3739, срез 1500 — нет). [`8fc7dd1`](https://github.com/AlexShutov/BrainHackAnalyzeHermesSkill/commit/8fc7dd1)
 - **Telethon `--limit 0`** — это ноль сообщений, а не «все»: пустой тред выглядел как «комментариев нет». `0 → None`. [`8fc7dd1`](https://github.com/AlexShutov/BrainHackAnalyzeHermesSkill/commit/8fc7dd1)
 - **Атрибуция абзаца для вердикта модели в пути комментариев** — `classifier.classify()` сама `para` не несёт (её добавляет тёплый worker), пары склеивались по ключу `None` и вердикт уходил не в тот абзац. Комментарий — один абзац: строке приписывается абзац маркерного hit-а; гейт слоя 3 сохранён. [`d7b8f60`](https://github.com/AlexShutov/BrainHackAnalyzeHermesSkill/commit/d7b8f60)
+- **Текстовый вывод `comment_sentiment.py` печатал ники и цитаты** — `@author «первые слова…»` по каждому треду, против правила доставки «без ников и без цитат»; это тот вывод, который агент копирует в чат. Вывод переведён на `format_text()` — ту же доставляемую форму, что `comment_analysis.block()` на всех трёх путях. Тест `test_comment_sentiment_text_output_has_no_nicknames`.
 
 ### 19 октября — мажорные
 
@@ -236,13 +237,12 @@ plugin/psych-rag/                pre_gateway_dispatch hook (no core patch)
 /Users/alex/.hermes/tools/psych-rag-env/bin/python scripts/tests/test_layers.py
 ```
 
-53 tests, stdlib only, ONNX/HF не грузятся (модели подменяются фиксами). Текущий прогон: 53/53.
+54 tests, stdlib only, ONNX/HF не грузятся (модели подменяются фиксами). Текущий прогон: 54/54.
 
 ## Known issues (не починено)
 
 Зафиксировано сплошным проходом по коду 19 октября; тестами не покрыто:
 
-- `comment_sentiment.py` печатает ники и цитаты — против правила доставки «без ников и без цитат» (это тот вывод, который агент копирует в чат).
 - CLI `classifier.py` без `--min` применяет только `thresholds.npy` (14 из 23 порогов ниже 0.70) — операционная точка не применяется.
 - `status_post.py`: guard `"message is not modified"` недостижим, потому что `api()` выходит на любом не-429 `HTTPError` — heartbeat с той же строкой статуса роняет скрипт, пост зависает на последом успешном обновлении.
 - `NEURAL_BUCKET` — 27 из 28: метка `curiosity` без корзины, fallback на лексикон.
