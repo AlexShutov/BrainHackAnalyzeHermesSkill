@@ -193,6 +193,7 @@ plugin/psych-rag/                pre_gateway_dispatch hook (no core patch)
 - **Telethon `--limit 0`** — это ноль сообщений, а не «все»: пустой тред выглядел как «комментариев нет». `0 → None`. [`8fc7dd1`](https://github.com/AlexShutov/BrainHackAnalyzeHermesSkill/commit/8fc7dd1)
 - **Атрибуция абзаца для вердикта модели в пути комментариев** — `classifier.classify()` сама `para` не несёт (её добавляет тёплый worker), пары склеивались по ключу `None` и вердикт уходил не в тот абзац. Комментарий — один абзац: строке приписывается абзац маркерного hit-а; гейт слоя 3 сохранён. [`d7b8f60`](https://github.com/AlexShutov/BrainHackAnalyzeHermesSkill/commit/d7b8f60)
 - **Текстовый вывод `comment_sentiment.py` печатал ники и цитаты** — `@author «первые слова…»` по каждому треду, против правила доставки «без ников и без цитат»; это тот вывод, который агент копирует в чат. Вывод переведён на `format_text()` — ту же доставляемую форму, что `comment_analysis.block()` на всех трёх путях. Тест `test_comment_sentiment_text_output_has_no_nicknames`.
+- **`block()` печатал `None%`, когда измерить нечего** — правило требует «не измеряется» для треда с <2 содержательными; плюс блок не сообщал число активных тредов (≥2 содержательных), которое правило требует. Теперь `thread_homogeneity` несёт `stance`, `block()` печатает «Активных тредов (≥2 содержательных): K из M» и отдельную строку «не измеряется»; `None%` не появляется нигде, включая пустой набор. Тест `test_block_reports_unmeasurable_thread_as_not_measured`.
 
 ### 19 октября — мажорные
 
@@ -237,7 +238,7 @@ plugin/psych-rag/                pre_gateway_dispatch hook (no core patch)
 /Users/alex/.hermes/tools/psych-rag-env/bin/python scripts/tests/test_layers.py
 ```
 
-54 tests, stdlib only, ONNX/HF не грузятся (модели подменяются фиксами). Текущий прогон: 54/54.
+55 tests, stdlib only, ONNX/HF не грузятся (модели подменяются фиксами). Текущий прогон: 55/55.
 
 ## Known issues (не починено)
 
@@ -247,7 +248,6 @@ plugin/psych-rag/                pre_gateway_dispatch hook (no core patch)
 - `status_post.py`: guard `"message is not modified"` недостижим, потому что `api()` выходит на любом не-429 `HTTPError` — heartbeat с той же строкой статуса роняет скрипт, пост зависает на последом успешном обновлении.
 - `NEURAL_BUCKET` — 27 из 28: метка `curiosity` без корзины, fallback на лексикон.
 - `MARKETING` слишком широкий: «для вас», «осталось », «90%», «по ссылке» — бытовые фразы дают 💸.
-- `block()` печатает «в среднем по тредам None%», когда измерить нечего; правило требует «не измеряется».
 - Проценты настроения через `round()`: на трёх категориях сумма 99, а не 100.
 - `cross_check` считается даже когда слой и есть лексикон — двойной проход по тому же словарю.
 - `neural_runner()` грузит модели на каждый вызов (тёплый worker есть только для плагина).

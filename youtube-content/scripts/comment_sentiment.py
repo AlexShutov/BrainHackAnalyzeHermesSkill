@@ -131,7 +131,7 @@ def thread_homogeneity(threads, by_id):
         if len(stance) < 2:
             thread_lines.append({"thread": (members[0].get("text") or "")[:60],
                                  "author": members[0].get("author"), "size": len(members),
-                                 "dominant": None, "homogeneity": None})
+                                 "stance": len(stance), "dominant": None, "homogeneity": None})
             continue
         ccount = {}
         for m in stance:
@@ -144,7 +144,7 @@ def thread_homogeneity(threads, by_id):
         p = by_id.get(pid) or members[0]
         thread_lines.append({"thread": (p.get("text") or "")[:60],
                              "author": p.get("author"), "size": len(members),
-                             "dominant": dom, "homogeneity": hom})
+                             "stance": len(stance), "dominant": dom, "homogeneity": hom})
     homs = [t["homogeneity"] for t in thread_lines if t["homogeneity"] is not None]
     overall = round(sum(homs) / len(homs)) if homs else None
     weighted = round(hom_sum / hom_n) if hom_n else None

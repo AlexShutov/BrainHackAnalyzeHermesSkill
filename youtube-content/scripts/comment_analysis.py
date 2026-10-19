@@ -254,12 +254,22 @@ def block(res):
     elif res.get("neural_unavailable"):
         lines.append("Нейро-слой был запрошен, но остался недоступен — числа получены "
                      "лексиконом (словарём), а не моделью.")
-    lines.append(f"Однородность в треде: в среднем по тредам {res['overall']}% "
-                 f"(взвешенная {res['weighted']}%).")
     active = [t for t in res["threads"] if t["homogeneity"] is not None]
-    for t in active:
-        lines.append(f"тред {t['size']} — доминирует {t['dominant']}, "
-                     f"однородность {t['homogeneity']}%")
+    lines.append(f"Активных тредов (≥2 содержательных): {len(active)} из {len(res['threads'])}.")
+    if res["overall"] is None:
+        # правило: тред с <2 содержательными — «не измеряется», а не None%
+        lines.append("Однородность в треде: не измеряется "
+                     "(нет тредов с ≥2 содержательными комментариями).")
+    else:
+        lines.append(f"Однородность в треде: в среднем по тредам {res['overall']}% "
+                     f"(взвешенная {res['weighted']}%).")
+    for t in res["threads"]:
+        if t["homogeneity"] is None:
+            lines.append(f"тред {t['size']} — не измеряется "
+                         f"(нейтральный тред, содержательных {t.get('stance', 0)})")
+        else:
+            lines.append(f"тред {t['size']} — доминирует {t['dominant']}, "
+                         f"однородность {t['homogeneity']}%")
     counts = {}
     for c in res["comments"]:
         counts[c["tag"]] = counts.get(c["tag"], 0) + 1

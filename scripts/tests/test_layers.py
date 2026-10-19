@@ -901,6 +901,31 @@ class CommentAnalysisTests(unittest.TestCase):
         self.assertIn("однородность", out.lower(), "сводка по тредам пропала")
         self.assertIn("кричащих", out, "статистика по кричащим потерялась вместе с никами")
 
+    def test_block_reports_unmeasurable_thread_as_not_measured(self):
+        """Правило: тред с <2 содержательными — «не измеряется», а не None%;
+        активные треды (≥2 содержательных) считаются и показываются числом."""
+        rows = [{"id": "R1", "author": "a", "text": "злая бешеная критика", "parent": "root", "likes": 0},
+                {"id": "R1.1", "author": "b", "text": "просто текст без позиции", "parent": "R1", "likes": 0}]
+        res = CA.analyze(rows, use_neural=False, use_markers=False)
+        out = CA.block(res)
+        self.assertNotIn("None%", out, "блок печатает None% вместо «не измеряется»")
+        self.assertIn("не измеряется", out, "тред с одним содержательным не назван неизмеримым")
+        self.assertIn("Активных тредов (≥2 содержательных): 0 из 1", out,
+                      "число активных тредов пропало из доставляемого блока")
+
+        # измеримый тред (два содержательных) — число и процент на месте
+        rows2 = [{"id": "R1", "author": "a", "text": "злая бешеная критика", "parent": "root", "likes": 0},
+                 {"id": "R1.1", "author": "b", "text": "злая бешеная критика", "parent": "R1", "likes": 0}]
+        res2 = CA.analyze(rows2, use_neural=False, use_markers=False)
+        out2 = CA.block(res2)
+        self.assertIn("Активных тредов (≥2 содержательных): 1 из 1", out2)
+        self.assertIn("в среднем по тредам 100%", out2)
+
+        # пустой набор — тоже без None%
+        out3 = CA.block(CA.analyze([], use_neural=False, use_markers=False))
+        self.assertNotIn("None%", out3, "пустой набор печатает None%")
+        self.assertIn("не измеряется", out3)
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
