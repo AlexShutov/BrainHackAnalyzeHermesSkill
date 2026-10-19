@@ -133,14 +133,21 @@ class TestFixed(unittest.TestCase):
                 return []
         tele.client = lambda: FakeClient()
         tele.load_config = lambda: {"api_id": 1, "api_hash": "x"}
+        # патчить атрибут и восстанавливать в finally: tele.os — тот же объект os, что у
+        # всего теста, и без восстановления подмена остаётся на следующие тесты
+        # (проверка существования файла всегда даёт True)
+        orig_exists = tele.os.path.exists
         tele.os.path.exists = lambda p: True
         tele.out = lambda o: None
-        class A: link, chat, post, limit, sentiment = "t.me/x/1", None, None, 0, False
-        tele.cmd_comments(A())
-        self.assertIsNone(seen.get("limit"), "0 должно превращаться в None («все»)")
-        A.limit = 50
-        tele.cmd_comments(A())
-        self.assertEqual(seen.get("limit"), 50)
+        try:
+            class A: link, chat, post, limit, sentiment = "t.me/x/1", None, None, 0, False
+            tele.cmd_comments(A())
+            self.assertIsNone(seen.get("limit"), "0 должно превращаться в None («все»)")
+            A.limit = 50
+            tele.cmd_comments(A())
+            self.assertEqual(seen.get("limit"), 50)
+        finally:
+            tele.os.path.exists = orig_exists
 
     def test_lexicon_word_boundary_and_negation(self):
         self.assertEqual(comment_sentiment.classify("ураган")[0], "нейтрально",
@@ -304,8 +311,8 @@ class TestOpenBugs(unittest.TestCase):
             if attempts["n"] == 1:
                 raise err
             return Resp()
-        orig = (status_post.urllib.request.urlopen, status_post.bot_token, status_post.time.sleep)
-        status_post.urllib.request.urlopen = fake_urlopen
+        orig = (status_post._urlopen, status_post.bot_token, status_post.time.sleep)
+        status_post._urlopen = fake_urlopen
         status_post.bot_token = lambda: "T"
         status_post.time.sleep = lambda s: None
         try:
@@ -586,6 +593,74 @@ class TestOpenBugs(unittest.TestCase):
             self.assertIn("usage", str(e).lower())
         else:
             self.fail("неполная команда обязана завершаться usage-сообщением")
+
+    def test_status_post_not_modified_guard_is_reachable(self):
+        """Правило: guard «message is not modified» обязан быть достижим. Раньше api()
+        выходил на любом не-429 HTTPError, и heartbeat с той же строкой статуса ронял
+        скрипт, а пост зависал на последом успешном обновлении. Кейс, где «как есть»
+        (падение) и «по правилу» (guard) дают разный результат. Сетевой скрипт тестируется
+        через dry-run + mock-transport, а не через чтение исходника."""
+        import urllib.error, urllib.parse
+        calls = []
+
+        def http_err(desc):
+            return urllib.error.HTTPError("u", 400, "Bad Request", {},
+                                          io.BytesIO(json.dumps({"ok": False,
+                                                                 "description": desc}).encode()))
+
+        def fake(req, timeout=15):
+            calls.append(req)
+            text = urllib.parse.parse_qs(req.data.decode()).get("text", [""])[0]
+            if "[SAME]" in text:
+                raise http_err("Bad Request: message is not modified")
+            if "[TOOLONG]" in text:
+                raise http_err("Bad Request: message is too long")
+            class Resp:
+                def __enter__(self): return self
+                def __exit__(self, *a): return False
+                def read(self): return json.dumps({"ok": True, "result": {"message_id": 5}}).encode()
+            return Resp()
+
+        def run(argv_list, stream):
+            argv, sys.argv = sys.argv, argv_list
+            buf = io.StringIO()
+            ctx = contextlib.redirect_stdout(buf) if stream == "out" else contextlib.redirect_stderr(buf)
+            try:
+                with ctx:
+                    status_post.main()
+            except SystemExit as e:
+                buf.write(str(e))          # выход скрипта — тоже результат теста
+            finally:
+                sys.argv = argv
+            return buf.getvalue()
+
+        orig = (status_post._urlopen, status_post.bot_token, status_post.STATE_DIR)
+        status_post._urlopen, status_post.bot_token = fake, lambda: "T"
+        status_post.STATE_DIR = tempfile.mkdtemp()
+        try:
+            with open(os.path.join(status_post.STATE_DIR, "k.json"), "w") as f:
+                json.dump({"chat_id": "123", "message_id": 5, "preview": "превью"}, f)
+
+            # A: heartbeat с той же строкой — guard обязан сработать, скрипт не падает
+            out = run(["status_post.py", "update", "k", "статус [SAME]"], "out")
+            self.assertIn("updated", out,
+                          "guard недостижим: api() выходит на не-429 HTTPError, "
+                          "heartbeat с той же строкой роняет скрипт")
+
+            # B: реальная ошибка не проглатывается тем же guard-ом
+            err = run(["status_post.py", "update", "k", "статус [TOOLONG]"], "err")
+            self.assertIn("HTTP 400", err, "настоящая ошибка обязана остаться ошибкой")
+
+            # C: dry-run печатает, что отправил бы, и не пишет ничего
+            calls.clear()
+            out3 = run(["status_post.py", "start", "123", "drykey", "превью", "статус", "--dry-run"], "out")
+            self.assertIn("dry-run", out3, "dry-run обязан печатать, что отправил бы")
+            self.assertIn("превью", out3, "превью обязано сохраниться в dry-run-выводе")
+            self.assertEqual(calls, [], "dry-run обязан не делать сетевых запросов")
+            self.assertFalse(os.path.exists(os.path.join(status_post.STATE_DIR, "drykey.json")),
+                             "dry-run обязан ничего не писать")
+        finally:
+            (status_post._urlopen, status_post.bot_token, status_post.STATE_DIR) = orig
 
 class TagRuleTests(unittest.TestCase):
     """Поведенческие тесты на починки тегов комментария (пункты аудита)."""

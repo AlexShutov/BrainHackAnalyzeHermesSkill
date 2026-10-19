@@ -26,7 +26,16 @@ def bot_token():
     raise SystemExit("токен бота не найден в ~/.hermes/.env")
 
 
-def api(method, **params):
+_urlopen = urllib.request.urlopen   # mock-transport в тесте подменяет именно эту точку
+
+# Telegram отвечает HTTP 400 «message is not modified» на editMessageText с тем же текстом
+# — обычная ситуация при heartbeat (та же строка статуса). Раньше api() выходил на любом
+# не-429 HTTPError, поэтому guard в main() был недостижим: heartbeat ронял скрипт, а пост
+# зависал на последом успешном обновлении. Теперь такие описания возвращаются вызывающему.
+TOLERATED = ("message is not modified",)
+
+
+def api(method, tolerate=(), **params):
     """Один запрос с обработкой 429 и сетевой ошибки. Раньше любое HTTP-исключение
     роняло скрипт стеком, а флуд-контроль Telegram (3 edits/сек) — это обычная ситуация
     при heartbeat-обновлениях статуса."""
@@ -34,18 +43,25 @@ def api(method, **params):
     req = urllib.request.Request(f"https://api.telegram.org/bot{bot_token()}/{method}", data=data)
     for attempt in range(3):
         try:
-            with urllib.request.urlopen(req, timeout=15) as r:
+            with _urlopen(req, timeout=15) as r:
                 return json.load(r)
         except urllib.error.HTTPError as e:
-            body = e.read().decode()[:200]
+            raw = e.read().decode()
+            try:
+                body = json.loads(raw)
+            except Exception:
+                body = None
             if e.code == 429:
                 try:
-                    wait = int(json.loads(body).get("parameters", {}).get("retry_after", 3))
+                    wait = int((body or {}).get("parameters", {}).get("retry_after", 3))
                 except Exception:
                     wait = 3
                 time.sleep(min(wait, 30))
                 continue
-            sys.exit(f"HTTP {e.code}: {body}")
+            desc = (body or {}).get("description") or ""
+            if any(t in desc for t in tolerate):
+                return body or {"ok": False, "description": desc}
+            sys.exit(f"HTTP {e.code}: {raw[:200]}")
         except (urllib.error.URLError, TimeoutError) as e:
             if attempt == 2:
                 sys.exit(f"сеть: {e}")
@@ -89,10 +105,16 @@ def main():
     if len(sys.argv) < 2:
         sys.exit(USAGE)
     cmd = sys.argv[1]
+    dry = "--dry-run" in sys.argv          # печатает, что отправил бы, и не пишет ничего:
+                                           # без этого сетевой скрипт тестируется только
+                                           # чтением исходника и проходит, когда логика сломана
     if cmd == "start":
         if len(sys.argv) < 6:
             sys.exit(USAGE)
         chat_id, key, preview, status = sys.argv[2], sys.argv[3], sys.argv[4], sys.argv[5]
+        if dry:
+            print(f"dry-run: sendMessage chat={chat_id}\n{clamp(preview, status)}")
+            return 0
         r = api("sendMessage", chat_id=chat_id, text=clamp(preview, status))
         if not r.get("ok"):
             sys.exit(f"send failed: {r}")
@@ -110,8 +132,12 @@ def main():
             sys.exit(f"нет поста для ключа {key} — сначала start")
         with open(p) as f:
             st = json.load(f)
+        if dry:
+            print(f"dry-run: editMessageText chat={st['chat_id']} message={st['message_id']}\n"
+                  f"{render(st, status)}")
+            return 0
         r = api("editMessageText", chat_id=st["chat_id"], message_id=st["message_id"],
-                text=render(st, status))
+                text=render(st, status), tolerate=TOLERATED)
         if not r.get("ok") and "message is not modified" not in r.get("description", ""):
             sys.exit(f"edit failed: {r}")
         print(f"updated: {key}")
