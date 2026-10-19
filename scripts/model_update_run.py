@@ -25,6 +25,37 @@ CONTROL = [
 # (гейт навыка — 0.70) и помечаем, что калибровка обязательна перед продвижением.
 OPERATING_POINT = 0.70
 
+TAXONOMY = os.path.join(SKILL, "psychology", "taxonomy_map.json")
+
+
+def device_of(label, tax):
+    """Перенос метки на общее словарное имя (устройство). Правило: при разных наборах
+    меток сравнение по имени некорректно — нужен перенос через taxonomy_map.json.
+    Метка, которой нет в карте, перенести нельзя: её нельзя молча считать расхождением."""
+    entry = (tax.get("labels") or {}).get(label) or {}
+    return entry.get("device") or None
+
+
+def compare_labels(a, b, tax, labels_match):
+    """Возвращает (same, unmapped). При одинаковых наборах — сравнение по имени.
+    При разных — по перенесённым устройствам; если хоть одна метка не переносится,
+    сравнение невозможно (same=None), и это отдельная строка отчёта, а не ноль в agrees."""
+    if labels_match:
+        return a == b, False
+    da = {device_of(l, tax) for l in a}
+    db = {device_of(l, tax) for l in b}
+    if None in da or None in db:
+        return None, True
+    return da == db, False
+
+
+def format_agreement(agree, total, unmapped):
+    """Совпадение по перенесённым меткам: unmapped-строка не имеет права молча
+    превращаться в ноль в agrees — она называется отдельно."""
+    base = f"{agree}/{total}"
+    return base + (f" ({unmapped} не переносится)" if unmapped else "")
+
+
 def save_state(s):
     with open(STATE, "w", encoding="utf-8") as fh:
         json.dump(s, fh, ensure_ascii=False, indent=2)
@@ -79,24 +110,36 @@ def main():
         src_new = ("thresholds.npy кандидата" if thr_new is not None
                    else f"рабочая точка {OPERATING_POINT} — своих порогов у кандидата нет, калибровка обязательна")
         labels_match = labels_live == labels_new
+        tax = load_json(TAXONOMY) if os.path.exists(TAXONOMY) else {}
         agree = 0
+        unmapped = 0
         detail = []
         for text in CONTROL:
             a = labels_of(live, tok_live, text, labels_live, thr_live)
             b = labels_of(new, tok_new, text, labels_new, thr_new)
-            detail.append({"text": text[:60], "in_use": sorted(a), "new": sorted(b), "same": a == b})
-            agree += int(a == b)
+            same, un = compare_labels(a, b, tax, labels_match)
+            if un:
+                unmapped += 1
+            agree += int(same is True)
+            row = {"text": text[:60], "in_use": sorted(a), "new": sorted(b), "same": same}
+            if not labels_match:
+                da = {device_of(l, tax) for l in a}
+                db = {device_of(l, tax) for l in b}
+                # unmapped-метку сортировать нельзя (None в множестве) — поле остаётся None
+                row["mapped"] = [sorted(da - {None}), sorted(db - {None})] if None not in da and None not in db else None
+            detail.append(row)
         st["status"] = "ready"
         st["verified_at"] = datetime.datetime.now().isoformat(timespec="seconds")
-        st["agreement"] = f"{agree}/{len(CONTROL)}"
+        st["agreement"] = format_agreement(agree, len(CONTROL), unmapped)
         st["detail"] = detail
         st["staging"] = STAGING
         st["thresholds"] = {"in_use": src_live, "new": src_new}
         st["labels_match"] = labels_match
         st["needs_calibration"] = thr_new is None
         if not labels_match:
-            st["note"] = ("наборы меток разные — совпадение меток по имени некорректно, "
-                          "нужен перенос через taxonomy_map.json")
+            st["note"] = (f"наборы меток разные ({len(labels_new)} против {len(labels_live)}) — "
+                          f"совпадение по имени некорректно, сравнение шло через перенос в "
+                          f"taxonomy_map.json; меток без переноса: {unmapped}")
         save_state(st)
         print(json.dumps({"status": "ready", "agreement": st["agreement"],
                           "thresholds": st["thresholds"], "labels_match": labels_match,

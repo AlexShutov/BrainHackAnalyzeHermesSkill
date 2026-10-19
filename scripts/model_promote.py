@@ -11,6 +11,14 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 SKILL = os.path.dirname(HERE)
 MODELS = os.path.join(SKILL, "psychology", "models")
 STATE = os.path.join(MODELS, "update_state.json")
+TAXONOMY = os.path.join(SKILL, "psychology", "taxonomy_map.json")
+
+def labels_at(path):
+    """Каталог модели создаёт установщик: на чистой копии labels.txt может не быть.
+    Отсутствие файла — не ошибка, а «меток нет»: сравнение и проверка длины порогов
+    по меткам просто не строятся (падение на отсутствующем артефакте установщика —
+    тот же класс бага, что импорт-time чтение)."""
+    return [l.strip() for l in read_lines(path)] if os.path.exists(path) else []
 
 def main():
     try:
@@ -47,12 +55,29 @@ def main():
         try:
             import numpy as np
             thr = np.load(new_thr)
-            labels = [l.strip() for l in read_lines(os.path.join(staging, "labels.txt"))]
-            if len(thr) != len(labels):
+            labels = labels_at(os.path.join(staging, "labels.txt"))
+            # меток нет → проверка длины порогов по меткам не строится (это не отказ)
+            if labels and len(thr) != len(labels):
                 print(f"порогов {len(thr)}, меток {len(labels)} — не совпадает", file=sys.stderr)
                 return 1
         except ImportError:
             pass
+
+    # Метки — свойство модели. При разных наборах сравнение по имени некорректно
+    # (нужен перенос через taxonomy_map.json), и продвижение меняет словарный слой:
+    # метка без переноса перестаёт сопоставляться с устройством. Продвигать такую
+    # модель нельзя, пока карта не покрывает метки кандидата (или --force).
+    labels_new, labels_live = labels_at(os.path.join(staging, "labels.txt")), \
+        labels_at(os.path.join(MODELS, "labels.txt"))
+    if labels_new and labels_live and labels_new != labels_live:
+        tax = load_json(TAXONOMY) if os.path.exists(TAXONOMY) else {}
+        missing = [l for l in labels_new
+                   if not ((tax.get("labels") or {}).get(l) or {}).get("device")]
+        if missing and not force:
+            print(f"наборы меток разные ({len(labels_new)} против {len(labels_live)}), "
+                  f"метки кандидата без переноса в taxonomy_map.json: {missing} — "
+                  f"нужна карта (или --force)", file=sys.stderr)
+            return 1
 
     shutil.copy(src, os.path.join(MODELS, "classifier_int8.onnx"))
     for f in ("tokenizer.json", "labels.txt", "thresholds.npy", "config.json", "model_version.json"):

@@ -102,8 +102,12 @@ check("clean-copy worker exits on EOF (rc 0)", p.returncode == 0, f"rc={p.return
 
 # 6. tests on the clean copy
 r = subprocess.run([PY, str(scripts / "tests/test_layers.py")], capture_output=True, text=True, timeout=300)
+# фактическое число тестов из прогона, а не remembered number: harness обязан
+# печатать Ran N и число падений, иначе отчёт цитирует цифру из памяти
+run_line = re.search(r"Ran (\d+) tests", r.stderr or "")
+failed = len(re.findall(r"^(FAIL|ERROR):", r.stderr or "", flags=re.M))
 check("tests pass on the clean copy", r.returncode == 0,
-      (r.stdout.strip().splitlines()[-1] if r.stdout else r.stderr[-120:]))
+      f"Ran {run_line.group(1) if run_line else '?'} tests, failures={failed}")
 
 # 7. plugin gate constants on the clean copy
 plugsrc = (clone / "plugin/psych-rag/__init__.py").read_text(encoding="utf-8")

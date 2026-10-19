@@ -390,6 +390,96 @@ class TestFixed(SnapshotMixin, unittest.TestCase):
         self.assertIs(CA.analyze, orig,
                       "модуль youtube-content не восстанавливается — тесты влияют друг на друга")
 
+    def test_label_comparison_maps_through_taxonomy_before_deciding(self):
+        """Поведение: при разных наборах меток сравнение по имени некорректно — нужен
+        перенос через taxonomy_map.json. Кейс, где «как есть» и «по правилу» дают РАЗНЫЙ
+        результат: два имени, которые карта переносит на одно устройство (по имени —
+        расхождение, по правилу — совпадение). Метка без переноса не имеет права молча
+        считаться расхождением: она называется отдельно. Отдельно — gate продвижения:
+        кандидат с метками вне карты отказывает и не трогает живую модель, --force обходит."""
+        import model_update_run as MUR, model_promote as MP
+        tax = {"labels": {"Doubt": {"device": "Сомнение"},
+                           "Other": {"device": "Сомнение"},
+                           "HateSpeech": {"device": ""}}}
+        self.assertEqual(MUR.compare_labels({"Doubt"}, {"Other"}, tax, True), (False, False),
+                         "при одинаковых наборах сравнение идёт по имени")
+        self.assertEqual(MUR.compare_labels({"Doubt"}, {"Other"}, tax, False), (True, False),
+                         "разные наборы — сравнение по перенесённым устройствам")
+        self.assertEqual(MUR.compare_labels({"Doubt"}, {"HateSpeech"}, tax, False), (None, True),
+                         "метка без переноса не имеет права молча считаться расхождением")
+        self.assertEqual(MUR.format_agreement(0, 3, 1), "0/3 (1 не переносится)",
+                         "unmapped обязана называться, а не превращаться в ноль в agrees")
+
+        d = tempfile.mkdtemp()
+        models, staging = os.path.join(d, "models"), os.path.join(d, "staging")
+        os.makedirs(models); os.makedirs(staging)
+        open(os.path.join(models, "classifier_int8.onnx"), "wb").write(b"LIVE")
+        open(os.path.join(staging, "classifier_int8.onnx"), "wb").write(b"NEW")
+        import numpy as np
+        np.save(os.path.join(models, "thresholds.npy"), np.array([0.7]))
+        np.save(os.path.join(staging, "thresholds.npy"), np.array([0.5]))
+        with open(os.path.join(models, "labels.txt"), "w", encoding="utf-8") as f:
+            f.write("Doubt\n")
+        with open(os.path.join(staging, "labels.txt"), "w", encoding="utf-8") as f:
+            f.write("HateSpeech\n")
+        state = os.path.join(models, "update_state.json")
+        with open(state, "w", encoding="utf-8") as f:
+            json.dump({"status": "ready", "staging": staging,
+                       "candidate": {"model_id": "x"}}, f)
+        taxfile = os.path.join(d, "tax.json")
+        with open(taxfile, "w", encoding="utf-8") as f:
+            json.dump(tax, f)
+        orig = MP.MODELS, MP.STATE, MP.TAXONOMY
+        MP.MODELS, MP.STATE, MP.TAXONOMY = models, state, taxfile
+        try:
+            buf = io.StringIO()
+            argv = sys.argv
+            sys.argv = ["model_promote.py"]
+            try:
+                with contextlib.redirect_stderr(buf):
+                    rc = MP.main()
+            finally:
+                sys.argv = argv
+            self.assertEqual(rc, 1, "кандидат с меткой вне карты продвинулся молча")
+            self.assertIn("taxonomy_map", buf.getvalue())
+            self.assertEqual(open(os.path.join(models, "classifier_int8.onnx"), "rb").read(),
+                             b"LIVE", "отказ обязан не трогать живую модель")
+            sys.argv = ["model_promote.py", "--force"]
+            try:
+                with contextlib.redirect_stdout(io.StringIO()):
+                    rc = MP.main()
+            finally:
+                sys.argv = argv
+            self.assertEqual(rc, 0, "--force обязан обходить gate")
+
+            # ветка чистой установки в ОТДЕЛЬНОМ каталоге: --force-прогон выше уже
+            # скопировал пороги и labels в «живой» каталог, и в том же каталоге следующий
+            # прогон отказал бы по совпадению порогов, а не по отсутствию меток — тест
+            # проверял бы не то правило. Здесь: пороги разные, меток кандидата нет.
+            d2 = tempfile.mkdtemp()
+            models2, staging2 = os.path.join(d2, "models"), os.path.join(d2, "staging")
+            os.makedirs(models2); os.makedirs(staging2)
+            open(os.path.join(models2, "classifier_int8.onnx"), "wb").write(b"LIVE")
+            open(os.path.join(staging2, "classifier_int8.onnx"), "wb").write(b"NEW")
+            np.save(os.path.join(models2, "thresholds.npy"), np.array([0.7]))
+            np.save(os.path.join(staging2, "thresholds.npy"), np.array([0.5]))
+            with open(os.path.join(models2, "labels.txt"), "w", encoding="utf-8") as f:
+                f.write("Doubt\n")
+            state2 = os.path.join(models2, "update_state.json")
+            with open(state2, "w", encoding="utf-8") as f:
+                json.dump({"status": "ready", "staging": staging2,
+                           "candidate": {"model_id": "x"}}, f)
+            MP.MODELS, MP.STATE = models2, state2
+            sys.argv = ["model_promote.py"]
+            try:
+                with contextlib.redirect_stdout(io.StringIO()):
+                    rc = MP.main()
+            finally:
+                sys.argv = argv
+            self.assertEqual(rc, 0, "отсутствие labels.txt должно быть «меток нет», а не падением")
+        finally:
+            MP.MODELS, MP.STATE, MP.TAXONOMY = orig
+
 class TestOpenBugs(SnapshotMixin, unittest.TestCase):
     def test_plugin_gate_equals_platform_limit(self):
         """Поведение: сообщение 4061 символа с 2 абзацами проходит гейт, 4121 — отклоняется;
