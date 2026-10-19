@@ -554,6 +554,41 @@ class TestOpenBugs(unittest.TestCase):
         else:
             self.fail("неполная команда обязана завершаться usage-сообщением")
 
+class TagRuleTests(unittest.TestCase):
+    """Поведенческие тесты на починки тегов комментария (пункты аудита)."""
+
+    def test_toxic_tag_respects_threshold(self):
+        # было: любое ненулевое insult -> 🤢 (p=0.01 — не токсичность)
+        self.assertEqual(CA.tag("обычный текст", "нейтрально", {"toxicity": {"insult": 0.01}}), "🙂")
+        self.assertEqual(CA.tag("обычный текст", "нейтрально", {"toxicity": {"insult": 0.35}}), "🤢")
+        self.assertEqual(CA.tag("обычный текст", "нейтрально", {"toxicity": {"insult": 0.80}}), "🤮")
+        self.assertEqual(CA.tag("обычный текст", "нейтрально",
+                                {"toxicity": {"insult": 0.35, "obscenity": 0.32}}), "🤮")
+        self.assertEqual(CA.tag("обычный текст", "нейтрально",
+                                {"toxicity": {}, "sarcasm": {"sarcasm": 0.29}}), "🙂")
+        self.assertEqual(CA.tag("обычный текст", "нейтрально",
+                                {"toxicity": {}, "sarcasm": {"sarcasm": 0.31}}), "🤢")
+        self.assertIn("🤢", CA.PRIORITY, "константа приоритета расходится с фактическим порядком tag()")
+
+    def test_priority_order_matches_docstring(self):
+        """Docstring — это доставляемое правило; он обязан совпадать с фактическим
+        порядком tag(). Раньше в нём не было 🤢, и правило обещало 🔴 там, где код
+        ставит 🤢. Проверка поведением: комментарий, где применимы и 🤢, и 🔴
+        (недовольство + insult 0.35), — код выбирает 🤢, и docstring обязан это отражать."""
+        both = CA.tag("обычный текст", "недовольство", {"toxicity": {"insult": 0.35}})
+        self.assertEqual(both, "🤢", "фактический порядок: 🤢 перед 🔴")
+        line = [l for l in CA.tag.__doc__.splitlines() if "→" in l][0]
+        stated = [s.strip() for s in line.split("→")]
+        self.assertEqual(stated, CA.PRIORITY, "docstring приоритета расходится с PRIORITY")
+        # и каждый соседний шаг порядка проверяется поведением, а не строкой
+        self.assertEqual(CA.tag("купите по ссылке", "недовольство",
+                                {"toxicity": {"insult": 0.80}}), "💸")
+        self.assertEqual(CA.tag("человек погиб", "недовольство",
+                                {"toxicity": {"insult": 0.80}}), "☠️")
+        self.assertEqual(CA.tag("обычный текст", "радость", {}), "😊")
+        self.assertEqual(CA.tag("обычный текст", "нейтрально", {}), "🙂")
+
+
 class RagPathTests(unittest.TestCase):
     """Поведенческие тесты RAG: FTS5-путь, fallback, резерв устройств, одиночный meta-запрос,
     read-only соединение. Проверяется поведение, а не наличие слов в исходнике."""

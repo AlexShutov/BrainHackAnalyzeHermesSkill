@@ -58,7 +58,7 @@ MARKETING = ["купите", "заказывайте", "закажи", "толь
              "для вас", "выбор 9", "90%", "учёные доказали", "доказано учёными",
              "бонус за", "подарок за", "по ссылке", "промокод"]
 
-PRIORITY = ["💸", "приём", "☠️", "🤮", "🔴", "😊", "🙂"]
+PRIORITY = ["💸", "приём", "☠️", "🤮", "🤢", "🔴", "😊", "🙂"]
 
 
 def neural_runner(models=("emotion", "toxicity", "sarcasm")):
@@ -99,7 +99,9 @@ def neural_runner(models=("emotion", "toxicity", "sarcasm")):
 
 def tag(text, cat, scores, device=None):
     """Один основной тег на комментарий, по приоритету правила:
-    💸 → приём → ☠️ → 🤮 → 🔴 → 😊 → 🙂."""
+    💸 → приём → ☠️ → 🤮 → 🤢 → 🔴 → 😊 → 🙂
+    Строка порядка — это и есть PRIORITY; тест сверяет их и проверяет порядок
+    поведением (комментарий, где применимы сразу две категории)."""
     low = text.lower()
     if any(w in low for w in MARKETING):
         return "💸"
@@ -111,7 +113,10 @@ def tag(text, cat, scores, device=None):
     toxic_hits = [l for l in TOXIC_LABELS if tox.get(l, 0) >= TOX_LOW]
     if any(tox.get(l, 0) >= TOX_HIGH for l in TOXIC_LABELS) or len(toxic_hits) >= 2:
         return "🤮"
-    if tox.get("insult", 0) or tox.get("obscenity", 0) or (scores.get("sarcasm") or {}).get("sarcasm", 0) >= TOX_LOW:
+    # 🤢 — малая степень: нужен порог TOX_LOW, а не любое ненулевое значение.
+    # Раньше insult p=0.01 давал 🤢 — комментарий размечался токсичным без основания.
+    if any(tox.get(l, 0) >= TOX_LOW for l in TOXIC_LABELS) or \
+       (scores.get("sarcasm") or {}).get("sarcasm", 0) >= TOX_LOW:
         return "🤢"
     if cat in ("злость", "недовольство"):
         return "🔴"
