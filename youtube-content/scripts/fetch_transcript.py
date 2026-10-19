@@ -38,12 +38,13 @@ def extract_video_id(url_or_id: str) -> str:
 
 
 def format_timestamp(seconds: float) -> str:
-    """Convert seconds to HH:MM:SS or MM:SS format."""
+    """Формат — MM:SS, как закреплено правилом пользователя (`EMOJI [MM:SS–MM:SS]`),
+    и он обязан оставаться тем же на видео длиннее часа: минуты продолжают счёт
+    (61:40), а не переходят в HH:MM:SS. Прежняя версия выдавала `1:01:40` — тот же
+    фрагмент доставлялся в другом формате, и таймлайн переставал соответствовать правилу.
+    Ссылка на момент выводится из секунд, поэтому от выбора формата не зависит."""
     total = int(seconds)
-    h, remainder = divmod(total, 3600)
-    m, s = divmod(remainder, 60)
-    if h > 0:
-        return f"{h}:{m:02d}:{s:02d}"
+    m, s = divmod(total, 60)
     return f"{m}:{s:02d}"
 
 
@@ -78,6 +79,23 @@ def fetch_transcript(video_id: str, languages: list | None = None):
     return segments, getattr(result, "language", None), bool(getattr(result, "is_generated", False))
 
 
+def build_result(video_id, segments, language, generated):
+    """Формирование результата — отдельная функция, тестируемая offline на mock-сегментах."""
+    full_text = " ".join(seg["text"] for seg in segments)
+    timestamped = "\n".join(
+        f"{format_timestamp(seg['start'])} {seg['text']}" for seg in segments
+    )
+    return {
+        "video_id": video_id,
+        "language": language,                 # обещано docstring
+        "generated": generated,               # авто-трек: ошибки распознавания имён и брендов
+        "segment_count": len(segments),
+        "duration": format_timestamp(segments[-1]["start"] + segments[-1]["duration"]) if segments else "0:00",
+        "full_text": full_text,
+        "timestamped_text": timestamped,
+    }
+
+
 def main():
     parser = argparse.ArgumentParser(description="Fetch YouTube transcript as JSON")
     parser.add_argument("url", help="YouTube URL or video ID")
@@ -87,10 +105,22 @@ def main():
                         help="Include timestamped text in output")
     parser.add_argument("--text-only", action="store_true",
                         help="Output plain text instead of JSON")
+    parser.add_argument("--dry-run", action="store_true",
+                        help="печатает запрос, который отправил бы, и не обращается к сети")
+    parser.add_argument("--mock-file", help="JSON сегментов для offline-проверки (вместо сети)")
     args = parser.parse_args()
 
     video_id = extract_video_id(args.url)
     languages = [l.strip() for l in args.language.split(",")] if args.language else None
+
+    if args.dry_run:
+        print(f"dry-run: запрос транскрипта video_id={video_id} languages={languages or 'auto'}")
+        if args.mock_file:
+            with open(args.mock_file, encoding="utf-8") as f:
+                segs = json.load(f)
+            print(json.dumps(build_result(video_id, segs, (languages or ["auto"])[0], True),
+                             ensure_ascii=False, indent=2))
+        return
 
     try:
         segments, language, generated = fetch_transcript(video_id, languages)
@@ -104,25 +134,12 @@ def main():
             print(json.dumps({"error": error_msg}))
         sys.exit(1)
 
-    full_text = " ".join(seg["text"] for seg in segments)
-    timestamped = "\n".join(
-        f"{format_timestamp(seg['start'])} {seg['text']}" for seg in segments
-    )
-
+    result = build_result(video_id, segments, language, generated)
     if args.text_only:
-        print(timestamped if args.timestamps else full_text)
+        print(result["timestamped_text"] if args.timestamps else result["full_text"])
         return
-
-    result = {
-        "video_id": video_id,
-        "language": language,                 # обещано docstring — раньше main его не печатал
-        "generated": generated,               # авто-трек: ошибки распознавания имён и брендов
-        "segment_count": len(segments),
-        "duration": format_timestamp(segments[-1]["start"] + segments[-1]["duration"]) if segments else "0:00",
-        "full_text": full_text,
-    }
-    if args.timestamps:
-        result["timestamped_text"] = timestamped
+    if not args.timestamps:
+        result.pop("timestamped_text", None)
 
     print(json.dumps(result, ensure_ascii=False, indent=2))
 

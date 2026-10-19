@@ -20,21 +20,37 @@ def video_id(url):
     return m.group(1) if m else None
 
 
-def get_json(url):
+def get_json(url, transport=None):
+    """transport — инъекция: тест подменяет сетевой вызов mock-transportом.
+    Без него — прежний путь ( urllib )."""
+    if transport is not None:
+        return transport(url)
     req = urllib.request.Request(url, headers=UA)
     return json.loads(urllib.request.urlopen(req, timeout=60).read())
 
 
-def fetch_all(vid, limit=0):
+def canonical_rows(payload):
+    """Каноническая форма комментария (id, parent, author, text) — одна функция,
+    которую может проверить тест без сети: она принимает уже полученный JSON."""
+    rows = []
+    for c in payload.get("results", []):
+        rows.append({"id": c.get("id"), "parent": c.get("parent_id") or "root",
+                     "author": (c.get("user") or {}).get("name") or "?",
+                     "text": (c.get("text") or "").strip()})
+    return rows
+
+
+def fetch_all(vid, limit=0, transport=None, dry_run=False, log=None):
     rows, url = [], f"https://rutube.ru/api/comments/video/{vid}/?limit=100"
     while url:
-        d = get_json(url)
-        for c in d.get("results", []):
-            rows.append({"id": c.get("id"), "parent": c.get("parent_id") or "root",
-                         "author": (c.get("user") or {}).get("name") or "?",
-                         "text": (c.get("text") or "").strip()})
-            if limit and len(rows) >= limit:
-                return rows
+        if dry_run:
+            # offline-режим: печатает, что отправил бы, и ничего не запрашивает
+            print(f"dry-run: GET {url}")
+            break
+        d = get_json(url, transport)
+        rows.extend(canonical_rows(d))
+        if limit and len(rows) >= limit:
+            return rows
         url = d.get("next")
     return rows
 
@@ -44,12 +60,23 @@ def main():
     ap.add_argument("url")
     ap.add_argument("--limit", type=int, default=0)
     ap.add_argument("--json", action="store_true")
+    ap.add_argument("--dry-run", action="store_true",
+                    help="печатает запрос, который отправил бы, и не обращается к сети")
+    ap.add_argument("--mock-file", help="JSON-ответ API для offline-проверки (вместо сети)")
     args = ap.parse_args()
 
     vid = video_id(args.url)
     if not vid:
         print("Not a Rutube video URL.", file=sys.stderr)
         sys.exit(1)
+    if args.dry_run:
+        print(f"dry-run: GET https://rutube.ru/api/comments/video/{vid}/?limit=100")
+        if args.mock_file:
+            with open(args.mock_file, encoding="utf-8") as f:
+                payload = json.load(f)
+            print("dry-run: каноническая форма из mock-ответа:")
+            print(json.dumps(canonical_rows(payload), ensure_ascii=False, indent=2))
+        return
     rows = fetch_all(vid, args.limit)
     if not rows:
         print("No comments available (disabled or fetch failed).", file=sys.stderr)

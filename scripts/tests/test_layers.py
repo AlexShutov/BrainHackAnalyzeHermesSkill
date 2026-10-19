@@ -480,6 +480,84 @@ class TestFixed(SnapshotMixin, unittest.TestCase):
         finally:
             MP.MODELS, MP.STATE, MP.TAXONOMY = orig
 
+    def test_rutube_comments_path_is_testable_offline_with_mock_transport(self):
+        """Правило написания тестов: сетевой скрипт становится тестируемым только когда у
+        него есть offline/dry-run режим и mock-transport. Прежный rutube_comments проверялся
+        чтением исходника и проходил, когда логика была сломана.
+        Кейс: mock-transport отдаёт пагинацию; проверка — каноническая форма (parent_id None
+        → root), переход по next, limit; dry-run не вызывает transport."""
+        sys.path.insert(0, YT)
+        import rutube_comments as RC
+
+        calls = []
+        def mock(url):
+            calls.append(url)
+            if "limit=100" in url and "?page" not in url and "page=" not in url:
+                return {"results": [{"id": 1, "parent_id": None, "user": {"name": "a"},
+                                     "text": "злой и злой"}],
+                        "next": "https://rutube.ru/api/comments/video/x/?page=2"}
+            return {"results": [{"id": 2, "parent_id": 1, "user": {"name": "b"},
+                                 "text": "не лучший"}], "next": None}
+
+        rows = RC.fetch_all("x", limit=0, transport=mock)
+        self.assertEqual(len(rows), 2, "пагинация по next не пройдена")
+        self.assertEqual(rows[1]["parent"], 1, "reply не привязан к родителю")
+        self.assertEqual(rows[0]["parent"], "root")
+        self.assertEqual(len(calls), 2, "mock-transport не использован как transport")
+
+        # limit: срезаем раньше пагинации
+        limited = RC.fetch_all("x", limit=1, transport=mock)
+        self.assertEqual(len(limited), 1, "limit не применён")
+
+        # dry-run: ничего не запрашивает
+        def boom(url):
+            raise AssertionError("dry-run обязан не обращаться к сети")
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            RC.fetch_all("x", transport=boom, dry_run=True)
+        self.assertIn("dry-run: GET", out.getvalue())
+
+    def test_fetch_transcript_path_is_testable_offline_with_mock(self):
+        """Тот же правило для транскрипционного пути: build_result проверяется на mock-сегментах,
+        dry-run печатает запрос без сети."""
+        sys.path.insert(0, YT)
+        import fetch_transcript as FT
+        segs = [{"text": "первый", "start": 0.0, "duration": 10.0},
+                {"text": "второй", "start": 3700.0, "duration": 5.0}]
+        res = FT.build_result("vid", segs, "ru", True)
+        self.assertEqual(res["language"], "ru", "поле language обещано docstring")
+        # 3700 + 5 = 3705 с = 61:45 — минуты идут дальше 59 по правилу
+        self.assertEqual(res["duration"], "61:45", "формат — MM:SS по правилу")
+        self.assertEqual(res["timestamped_text"], "0:00 первый\n61:40 второй")
+        argv = sys.argv
+        sys.argv = ["fetch_transcript.py", "https://youtube.com/watch?v=vid", "--dry-run"]
+        out = io.StringIO()
+        try:
+            with contextlib.redirect_stdout(out):
+                FT.main()
+        finally:
+            sys.argv = argv
+        self.assertIn("dry-run", out.getvalue())
+
+    def test_readme_guard_does_not_claim_socket_or_daemon(self):
+        """Проверка guard-а (не поведенческий тест): описание тёплого worker в README обязано
+        совпадать с кодом — pipes + atexit, worker умирает вместе с хозяином. Прежнее описание
+        обещало сокет, `worker.pid` и «демон переживает перезапуск плагина».
+        Guardscoped-на-описание: проверка по всей строке о worker, а не по всему файлу —
+        иначе тест падает на строке, которая сама сообщает о прежнем расхождении (раздел
+        «Known issues»), то есть проверяет не правило, а случайное отсутствие слова.
+        Поведенческая часть (atexit-регистрация клиента) — в WorkerLifecycleTests."""
+        src = open(os.path.join(SKILL, "README.md"), encoding="utf-8").read()
+        # описание transport-а — строка, которая говорит, КАК плагин говорит с worker;
+        # другие строки о worker (жизненный цикл, память) не обязаны называть транспорт
+        bullet = [ln for ln in src.splitlines() if "Тёплый worker" in ln and "JSON-lines" in ln]
+        self.assertTrue(bullet, "README обязан описывать транспорт тёплого worker")
+        for ln in bullet:
+            for bad in ("сокет", "worker.pid", "демон"):
+                self.assertNotIn(bad, ln, f"описание worker обещает {bad!r}, чего нет в коде")
+            self.assertIn("pipes", ln, "описание worker обязано называть фактический транспорт")
+            self.assertIn("atexit", ln, "описание worker обязано называть фактический жизненный цикл")
+
 class TestOpenBugs(SnapshotMixin, unittest.TestCase):
     def test_plugin_gate_equals_platform_limit(self):
         """Поведение: сообщение 4061 символа с 2 абзацами проходит гейт, 4121 — отклоняется;
@@ -1374,6 +1452,15 @@ class TagRuleTests(SnapshotMixin, unittest.TestCase):
         self.assertEqual(CA.tag("обычный текст", "нейтрально",
                                 {"toxicity": {}, "sarcasm": {"sarcasm": 0.31}}), "🤢")
         self.assertIn("🤢", CA.PRIORITY, "константа приоритета расходится с фактическим порядком tag()")
+
+    def test_timestamp_format_follows_the_rule_on_long_videos(self):
+        """Правило: `EMOJI [MM:SS–MM:SS]`. Прежный format_timestamp переходил на HH:MM:SS
+        для видео длиннее часа — тот же фрагмент доставлялся в другом формате.
+        Кейс даёт разный результат: 3700 секунд — по правилу `61:40`, по-прежнему `1:01:40`."""
+        import fetch_transcript as FT
+        self.assertEqual(FT.format_timestamp(3700), "61:40")
+        self.assertEqual(FT.format_timestamp(59), "0:59")
+        self.assertEqual(FT.format_timestamp(3661), "61:01")
 
     def test_block_states_unavailable_neural_layer(self):
         rows = [{"id": "R1", "author": "a", "text": "злой и злой", "parent": "root", "likes": 0}]
