@@ -24,7 +24,10 @@
 import json, os, re, sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                                "..", "..", "scripts")))
 import comment_sentiment as CS
+import tag_routing as TR
 
 NEURAL_BUCKET = {
     "anger": "злость", "annoyance": "злость", "disgust": "злость",
@@ -120,6 +123,26 @@ def neural_runner(models=("emotion", "toxicity", "sarcasm")):
     return run
 
 
+def device_pairs(text):
+    """Пара подтипа по маркерам + вердикту классификатора на абзаце — тот же
+    словарь маршрутизации, что у пути текста (psych_layer), через tag_routing.
+    Раньше ни один из трёх путей (YouTube / Rutube / Telegram) не передавал
+    device_by_text, и «приём» в блоке комментариев был невозможен: приоритет
+    «приём» никогда не срабатывал, и вместо подтипа показывалось имя устройства."""
+    try:
+        import markers, classifier
+    except Exception:
+        return None
+    try:
+        hits = markers.scan(text)
+        if not hits:
+            return None
+        pairs = TR.device_pairs(hits, classifier.classify(text))
+    except Exception:
+        return None
+    return next(iter(pairs.values()), None)
+
+
 def tag(text, cat, scores, device=None):
     """Один основной тег на комментарий, по приоритету правила:
     💸 → приём → ☠️ → 🤮 → 🤢 → 🔴 → 😊 → 🙂
@@ -129,7 +152,11 @@ def tag(text, cat, scores, device=None):
     if any(w in low for w in MARKETING):
         return "💸"
     if device:
-        return device
+        # приём — это пара подтипа, а не имя устройства: имя без пары —
+        # незавершённая метка (правило: ⚫ без пары — неполная разметка)
+        p = TR.pair_for_device(device)
+        if p:
+            return p
     d = death_tag(text)
     if d:
         return d
@@ -149,14 +176,17 @@ def tag(text, cat, scores, device=None):
     return "🙂"
 
 
-def analyze(rows, runner=None, device_by_text=None, use_neural=True):
+def analyze(rows, runner=None, device_by_text=None, use_neural=True, use_markers=True):
     """rows — каноническая форма комментария. device_by_text — {текст: имя приёма}
     от маркерного слоя (для строки «приём»); без него приём не называется, и тег
     не ставится: правило требует уверенного вердикта, а не совпадения слов.
 
     `use_neural=False` — явный лексикон (для сверки цифр); `runner` — готовый прогон,
-    иначе берётся тёплый neural_runner()."""
+    иначе берётся тёплый neural_runner(). `use_markers=False` — не запускать маркерный
+    слой (для сверки цифр)."""
     texts = [r.get("text") or "" for r in rows]
+    if device_by_text is None and use_markers:
+        device_by_text = {t: device_pairs(t) for t in texts}
     scores = None
     if runner is None and use_neural:
         runner = neural_runner()

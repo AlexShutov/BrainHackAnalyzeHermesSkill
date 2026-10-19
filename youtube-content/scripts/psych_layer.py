@@ -72,36 +72,17 @@ def worker_call(op, **kw):
 
 # Все 23 метки SemEval-2023 распределены явно; NLP-классов у классификатора нет —
 # 🔪🧠 определяется маркерным слоем (Левинсон, эпистемическая дистанция) и RAG (внушение/Дилтс).
-LABEL_SUBTYPE = {
-    # 📢🧠 пропаганда — массовый нарратив, мобилизационная риторика
-    "Flag_Waving": "📢🧠",
-    "Appeal_to_Fear-Prejudice": "📢🧠",
-    "Guilt_by_Association": "📢🧠",
-    "Appeal_to_Hypocrisy": "📢🧠",
-    "Whataboutism": "📢🧠",
-    "Slogans": "📢🧠",
-    "Appeal_to_Time": "📢🧠",
-    "Appeal_to_Popularity": "📢🧠",
-    # 🎭🧠 психологические манипуляции — логические и эмоциональные приёмы
-    "Loaded_Language": "🎭🧠",
-    "Name_Calling-Labeling": "🎭🧠",
-    "Doubt": "🎭🧠",
-    "Exaggeration-Minimisation": "🎭🧠",
-    "Causal_Oversimplification": "🎭🧠",
-    "Consequential_Oversimplification": "🎭🧠",
-    "False_Dilemma-No_Choice": "🎭🧠",
-    "Straw_Man": "🎭🧠",
-    "Red_Herring": "🎭🧠",
-    "Obfuscation-Vagueness-Confusion": "🎭🧠",
-    "Repetition": "🎭🧠",
-    "Conversation_Killer": "🎭🧠",
-    "Appeal_to_Authority": "🎭🧠",
-    "Appeal_to_Values": "🎭🧠",
-    "Questioning_the_Reputation": "🎭🧠",
-}
-NLP_FAMILY_MARKS = (  # marker-layer families = НЛП-инструментарий (Левинсон, эпистемическая дистанция, НЛП-пакеты)
-    "пресуппозици", "номинализаци", "номinalизация", "эпистемическ", "нлп",
-)
+# Метка классификатора -> подтип. Единый источник для обеих путей: путь текста
+# (psych_layer) и путь комментариев (comment_analysis) читают tag_routing, иначе
+# два набора правил расходятся (было: comment_analysis никогда не выдавал пару).
+# «фокус» добавлен в НЛП-набор: семья «Фокусы языка: …» (Дилтс) раньше не ловилась
+# и фокус Дилтса молча уходил в 🎭🧠 вместо 🔪🧠 по правилу навыка.
+sys.path.insert(0, SCRIPTS)
+import tag_routing as TR
+
+LABEL_SUBTYPE = TR.LABEL_SUBTYPE
+NLP_FAMILY_MARKS = TR.NLP_FAMILY_MARKS
+
 
 
 def marker_families_in(para_index, para_text, markers):
@@ -144,7 +125,7 @@ def attach_subtypes(classification, markers):
                     LABEL_SUBTYPE.get(l.get("label")) == "🎭🧠" for l in para.get("labels", [])):
                 present.append(s)
             elif s == "🔪🧠":
-                nlp = sum(1 for f in fams if any(m in f.lower() for m in NLP_FAMILY_MARKS))
+                nlp = sum(1 for f in fams if TR.pair_for_family(f) == "🔪🧠")
                 if nlp:
                     present.append(s)
         para["subtype"] = present[0] if present else None

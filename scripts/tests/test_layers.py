@@ -26,7 +26,7 @@ sys.path.insert(0, YT)
 import markers, side
 import types
 import ukr_detect as ukr, comment_sentiment, comment_analysis as CA, status_post, neural_pass
-import classifier, rag_core as R
+import classifier, rag_core as R, tag_routing as TR
 
 def read(path):
     with open(path, encoding="utf-8") as f:
@@ -569,6 +569,46 @@ class TagRuleTests(unittest.TestCase):
         self.assertEqual(CA.tag("обычный текст", "нейтрально",
                                 {"toxicity": {}, "sarcasm": {"sarcasm": 0.31}}), "🤢")
         self.assertIn("🤢", CA.PRIORITY, "константа приоритета расходится с фактическим порядком tag()")
+
+    def test_device_tag_is_pair_not_name(self):
+        self.assertEqual(CA.tag("текст", "нейтрально", {}, "False_Dilemma-No_Choice"), "🎭🧠")
+        self.assertEqual(CA.tag("текст", "нейтрально", {}, "Slogans"), "📢🧠")
+        self.assertEqual(CA.tag("текст", "нейтрально", {}, "🔪🧠"), "🔪🧠")
+        # имя устройства без пары — незавершённая метка: подтип решается по сработавшей семье
+        self.assertEqual(TR.pair_for_device("Пресуппозиция",
+                                            "пресуппозиционные триггеры (Levinson 1983)"), "🔪🧠")
+        self.assertIsNone(TR.pair_for_device("Пресуппозиция"),
+                          "без сработавшей семьи и без вердикта пары нет — метка неполная")
+
+    def test_comment_block_can_actually_show_device_tag(self):
+        # раньше device_by_text не передавал ни один из трёх путей: «приём» был невозможен
+        ms, cs = markers.scan, classifier.classify
+        markers.scan = lambda txt: [{"family": "структурные маркеры", "marker": "repetition",
+                                     "para": 1, "found": "x", "context": "y",
+                                     "candidates": ["Ложная дилемма"]}]
+        classifier.classify = lambda text, min_conf=None: [
+            {"label": "False_Dilemma-No_Choice", "p": 0.80, "threshold": 0.57, "chunk": 1,
+             "ru": "Ложная дилемма", "device": "Ложная дилемма"}]
+        try:
+            rows = [{"id": "R1", "author": "a", "text": "либо A, либо B", "parent": "root", "likes": 0}]
+            res = CA.analyze(rows, use_neural=False)
+            self.assertEqual(res["comments"][0]["tag"], "🎭🧠",
+                             "блок комментариев не может показать приём")
+            self.assertIn("🎭🧠", CA.block(res))
+        finally:
+            markers.scan, classifier.classify = ms, cs
+
+    def test_dilts_families_route_to_nlp(self):
+        import psych_layer as PL
+        hit = {"family": "Фокусы языка: намерение и переопределение", "marker": "m",
+               "para": 1, "found": "x", "context": "y"}
+        out = PL.attach_subtypes([{"para": 1, "text": "абзац", "labels": []}], [hit])[0]
+        self.assertEqual(out["subtype"], "🔪🧠", "фокус Дилтса оставался без подтипа")
+
+    def test_one_routing_dictionary_for_both_paths(self):
+        import psych_layer as PL
+        self.assertIs(PL.LABEL_SUBTYPE, TR.LABEL_SUBTYPE)
+        self.assertIs(PL.NLP_FAMILY_MARKS, TR.NLP_FAMILY_MARKS)
 
     def test_death_tag_is_human_only(self):
         self.assertIsNone(CA.death_tag("мотор умер на холостых"), "смерть техники — не ☠️")
