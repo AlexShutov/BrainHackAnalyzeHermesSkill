@@ -196,6 +196,10 @@ def analyze(rows, runner=None, device_by_text=None, use_neural=True, use_markers
         except Exception:
             scores = None
     layer = "neural" if scores else "lexicon"
+    # честность доставляемого блока: если нейро был запрошен и не смог загрузиться,
+    # числа получены словарём, а не моделью — об этом говорится отдельной строкой.
+    # Раньше block() этого не говорил, и лексикон подавался как нейро-вердикт.
+    neural_unavailable = bool(use_neural) and not scores
 
     cats = []
     for i, r in enumerate(rows):
@@ -227,9 +231,9 @@ def analyze(rows, runner=None, device_by_text=None, use_neural=True, use_markers
 
     threads, by_id = CS.build_threads(tagged)
     thread_lines, overall, weighted = CS.thread_homogeneity(threads, by_id)
-    return {"layer": layer, "count": len(rows), "mood": mood_pct,
-            "cross_check": cross_pct, "overall": overall, "weighted": weighted,
-            "threads": thread_lines, "comments": tagged}
+    return {"layer": layer, "neural_unavailable": neural_unavailable, "count": len(rows),
+            "mood": mood_pct, "cross_check": cross_pct, "overall": overall,
+            "weighted": weighted, "threads": thread_lines, "comments": tagged}
 
 
 def block(res):
@@ -241,6 +245,9 @@ def block(res):
     if res["layer"] == "neural":
         lines.append("Кросс-проверка лексиконом: " +
                      ", ".join(f"{c} {p}%" for c, p in res["cross_check"].items()))
+    elif res.get("neural_unavailable"):
+        lines.append("Нейро-слой был запрошен, но остался недоступен — числа получены "
+                     "лексиконом (словарём), а не моделью.")
     lines.append(f"Однородность в треде: в среднем по тредам {res['overall']}% "
                  f"(взвешенная {res['weighted']}%).")
     active = [t for t in res["threads"] if t["homogeneity"] is not None]

@@ -187,6 +187,7 @@ The script classifies each comment by a Russian emotion lexicon (злость / 
 - `Однородность в треде: в среднем по тредам N%.` then one line per measurable thread: `@author «первые слова…» — однородность в треде X% (size, доминирует категория)`. If the script also prints `взвешенная по размеру тредов: M%`, that is a DIFFERENT number (size-weighted mean) — quote it only as such, never as «среднее по тредам».
 - Thread definition (fixed 2026-10-18): a thread = the root comment + ALL its descendants; a reply-to-a-reply stays in the same thread. When comment ids are not available (flat format from `fetch_comments.py`, which stores only `parent`), the root is derived from the parent prefix before the first dot (`<root_id>.<suffix>` — YouTube comment-id scheme).
 - State once, briefly, that the classifier is lexicon-based: sarcasm/irony can be misclassified, and homogeneity measures emotional coloring, not literal semantic agreement.
+- Если нейро-слой был **запрошен** и не смог загрузиться (transformers, модели, сеть), доставляемый блок обязан сказать это отдельной строкой: числа получены лексиконом, а не моделью. `comment_analysis.analyze()` несёт флаг `neural_unavailable`, `block()` печатает строку. Когда нейро не запрашивали (явный лексикон для сверки цифр), оговорки нет — тест проверяет оба случая, иначе блок врёт о слое.
 - If comments are disabled or fetch fails, say so plainly — never fabricate percentages.
 - The replay log record must include a `comments` field: `{mood, homogeneity_overall, threads}` matching the delivered numbers.
 

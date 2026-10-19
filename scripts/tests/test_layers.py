@@ -570,6 +570,16 @@ class TagRuleTests(unittest.TestCase):
                                 {"toxicity": {}, "sarcasm": {"sarcasm": 0.31}}), "🤢")
         self.assertIn("🤢", CA.PRIORITY, "константа приоритета расходится с фактическим порядком tag()")
 
+    def test_block_states_unavailable_neural_layer(self):
+        rows = [{"id": "R1", "author": "a", "text": "злой и злой", "parent": "root", "likes": 0}]
+        res = CA.analyze(rows, runner=lambda texts: None, use_neural=True, use_markers=False)
+        self.assertTrue(res["neural_unavailable"])
+        self.assertIn("недоступен", CA.block(res), "лексикон подан как нейро-вердикт")
+        # и не врёт, когда нейро не запрашивали: там лексикон по явному выбору для сверки
+        res2 = CA.analyze(rows, use_neural=False, use_markers=False)
+        self.assertFalse(res2["neural_unavailable"])
+        self.assertNotIn("недоступен", CA.block(res2), "лишняя оговорка, когда нейро не запрашивали")
+
     def test_device_tag_is_pair_not_name(self):
         self.assertEqual(CA.tag("текст", "нейтрально", {}, "False_Dilemma-No_Choice"), "🎭🧠")
         self.assertEqual(CA.tag("текст", "нейтрально", {}, "Slogans"), "📢🧠")
