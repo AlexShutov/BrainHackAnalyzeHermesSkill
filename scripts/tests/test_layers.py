@@ -366,6 +366,59 @@ class TestOpenBugs(unittest.TestCase):
         self.assertTrue(set(neural_pass.MULTILABEL) >= set(neural_pass.REPOS),
                         "fallback-порядок есть не для всех моделей индекса")
 
+    def test_neural_pass_batches_and_has_one_loop_definition(self):
+        """Поведение: правило — пачки по 32, поштучный forward на сотнях комментариев
+        ~10× медленнее. Фикс считает вызовы forward: на 100 текстах при batch 32 обязано
+        быть 4 вызова, а не 100. Пачка не имеет права менять метку: padding-хвосты не
+        участвуют в attention (mask=0), поэтому метка текста в пачке обязана совпасть с
+        меткой того же текста поштучно. И цикл батча обязан быть ОДИН (NP.infer), иначе
+        правило выполняется только на одном пути."""
+        calls = []
+
+        def tok(texts, **kw):
+            seqs = [[1] + [word_id(w) for w in re.findall(r"\w+", t)] + [2] for t in texts]
+            L = max(len(s) for s in seqs)
+            ids = [s + [0] * (L - len(s)) for s in seqs]
+            mask = [[1] * len(s) + [0] * (L - len(s)) for s in seqs]
+            return {"input_ids": ids, "attention_mask": mask}
+
+        labels = ["neutral", "doubt"]
+
+        def model(input_ids=None, attention_mask=None):
+            calls.append(len(input_ids))
+            rows = []
+            for row_ids, row_mask in zip(input_ids, attention_mask):
+                words = {ID2WORD.get(int(i), "") for i, m in zip(row_ids, row_mask) if m}
+                logits = [-3.0, -3.0]
+                if TARGET in words:
+                    logits[1] = 3.0
+                rows.append(logits)
+            return rows
+
+        texts = ["обычный текст"] * 100
+        texts[50] = f"тут {TARGET} в середине"
+        res = neural_pass.infer(tok, model, labels, texts, True, "emotion", batch=32)
+        self.assertEqual(calls, [32, 32, 32, 4], f"forward вызван {len(calls)} раз: {calls}")
+        self.assertEqual(res[50]["top"], "doubt", "пачка изменила метку текста")
+        single = neural_pass.infer(tok, model, labels, texts, True, "emotion", batch=1)
+        self.assertEqual([r["top"] for r in res], [r["top"] for r in single],
+                         "батч-проход даёт другие метки, чем поштучный")
+
+        # живой баг этого прохода: BatchEncoding — Mapping, а не dict, и путь падал
+        # на enc.ids (AttributeError). Тест строит Mapping-объект, который НЕ dict.
+        class MappingEnc:
+            def __init__(self, data): self.data = data
+            def __getitem__(self, k): return self.data[k]
+        enc = MappingEnc({"input_ids": [[1, 2], [1, 0]], "attention_mask": [[1, 1], [1, 0]]})
+        self.assertNotIsInstance(enc, dict, "тест обязан ловить именно Mapping, а не dict")
+        ids, mask = neural_pass._enc_pair(enc)
+        self.assertEqual(list(ids[1]), [1, 0], "Mapping-путь потерял строку")
+        self.assertEqual(list(mask[1]), [1, 0], "padding-маска потерялась")
+
+        src = read(os.path.join(YT, "comment_analysis.py"))
+        self.assertIn("NP.infer(", src,
+                      "comment_analysis держит свой цикл батча — два источника одного правила")
+
     # --- новое, найденное этим проходом ---
     def test_runtime_classifier_operating_point(self):
         """Поведение: порог = max(thresholds.npy, min_conf). Фикс ONNX даёт Doubt с p=0.60

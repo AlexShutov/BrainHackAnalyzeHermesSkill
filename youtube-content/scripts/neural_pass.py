@@ -43,6 +43,50 @@ LABELS = {
 # multi-label модели — sigmoid; одиночный класс — softmax
 MULTILABEL = {"emotion": True, "toxicity": True, "sarcasm": False}
 
+# Правило: нейро-проход идёт пачками, а не по одному комментату — на нескольких
+# сотнях комментариев поштучный forward ~10× медленнее.
+BATCH = 32
+
+
+def _probs(row, multilabel):
+    t = row if hasattr(row, "sigmoid") else torch.tensor(row, dtype=torch.float32)
+    return (torch.sigmoid(t) if multilabel else torch.softmax(t, dim=-1)).tolist()
+
+
+def _enc_pair(enc):
+    """BatchEncoding — Mapping, а не dict: `isinstance(enc, dict)` даёт False и путь
+    падает на `enc.ids`. Пробую индексирование, иначе атрибуты; к тензору приводим
+    только если это ещё не тензор (реальный токенаizer уже возвращает тензоры)."""
+    try:
+        ids, mask = enc["input_ids"], enc["attention_mask"]
+    except (TypeError, KeyError, AttributeError):
+        ids, mask = enc.ids, enc.attention_mask
+    if not hasattr(ids, "ndim"):
+        ids, mask = torch.tensor(ids, dtype=torch.long), torch.tensor(mask, dtype=torch.long)
+    return ids, mask
+
+
+def infer(tok, model, labels, texts, multilabel, name, batch=BATCH):
+    """Один forward на пачку. Duck-typed tok/model — поэтому тестируется без моделей:
+    фикс считает вызовы forward. Пустая строка не должна занимать место в пачке и
+    не должна влиять на метки соседних текстов."""
+    out = []
+    with torch.no_grad():
+        for i in range(0, len(texts), batch):
+            chunk = texts[i:i + batch]
+            enc = tok(chunk, return_tensors="pt", padding=True, truncation=True, max_length=512)
+            ids, mask = _enc_pair(enc)
+            res = model(input_ids=ids, attention_mask=mask)
+            logits = res.logits if hasattr(res, "logits") else res
+            for j, t in enumerate(chunk):
+                p = _probs(logits[j], multilabel)
+                top = max(zip(labels, p), key=lambda x: x[1])
+                out.append({"model": name, "text": t, "top": top[0],
+                            "p": round(top[1], 3),
+                            "all": {k: round(v, 3) for k, v in zip(labels, p)}})
+    return out
+
+
 
 def load_no_mmap(repo):
     path = hf_hub_download(repo, "model.safetensors")
@@ -88,7 +132,11 @@ def main():
     ap.add_argument("--out", help="write JSON here")
     ap.add_argument("--models", default="toxicity,sarcasm",
                     help="comma list from emotion,toxicity,sarcasm")
+    ap.add_argument("--batch", type=int, default=BATCH,
+                    help=f"размер пачки (правило: {BATCH}; 1 — поштучно, для сверки)")
     a = ap.parse_args()
+    if a.batch < 1:
+        sys.exit("--batch обязан быть >= 1")
 
     names = [n.strip() for n in a.models.split(",") if n.strip()]
     unknown = [n for n in names if n not in REPOS]
@@ -100,16 +148,7 @@ def main():
         repo = REPOS[name]
         tok = AutoTokenizer.from_pretrained(repo)
         model, labels = load_no_mmap(repo)
-        with torch.no_grad():
-            for t in texts:
-                enc = tok(t, return_tensors="pt", truncation=True, max_length=512)
-                logits = model(**enc).logits[0]
-                p = (torch.sigmoid(logits) if MULTILABEL[name]
-                     else torch.softmax(logits, dim=-1)).tolist()
-                top = max(zip(labels, p), key=lambda x: x[1])
-                out.append({"model": name, "text": t, "top": top[0],
-                            "p": round(top[1], 3),
-                            "all": {k: round(v, 3) for k, v in zip(labels, p)}})
+        out.extend(infer(tok, model, labels, texts, MULTILABEL[name], name, a.batch))
     print(json.dumps(out, ensure_ascii=False, indent=1))
     if a.out:
         write_json(a.out, out)

@@ -240,7 +240,7 @@ plugin/psych-rag/                pre_gateway_dispatch hook (no core patch)
 /Users/alex/.hermes/tools/psych-rag-env/bin/python scripts/tests/test_layers.py
 ```
 
-60 tests, stdlib only, ONNX/HF не грузятся (модели подменяются фиксами). Текущий прогон: 60/60.
+61 tests, stdlib only, ONNX/HF не грузятся (модели подменяются фиксами). Текущий прогон: 61/61.
 
 ## Known issues (не починено)
 

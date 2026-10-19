@@ -110,19 +110,13 @@ def neural_runner(models=("emotion", "toxicity", "sarcasm")):
     except Exception:
         return None
 
-    def run(texts, batch=32):
-        import torch
+    def run(texts, batch=NP.BATCH):
+        # один источник цикла батча — NP.infer: иначе правило «пачки по 32» живёт
+        # в двух местах и выполняется только на одном пути
         out = {name: [] for name in loaded}
         for name, (tok, model, labels, multi) in loaded.items():
-            for i in range(0, len(texts), batch):
-                chunk = texts[i:i + batch]
-                enc = tok(chunk, return_tensors="pt", truncation=True,
-                          max_length=512, padding=True)
-                with torch.no_grad():
-                    logits = model(**enc).logits
-                for row in logits:
-                    p = (torch.sigmoid(row) if multi else torch.softmax(row, dim=-1)).tolist()
-                    out[name].append({labels[j]: round(float(v), 3) for j, v in enumerate(p)})
+            for row in NP.infer(tok, model, labels, texts, multi, name, batch):
+                out[name].append(row["all"])
         return out
 
     return run
