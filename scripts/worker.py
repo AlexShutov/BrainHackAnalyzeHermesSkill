@@ -55,7 +55,10 @@ RSS_LIMIT_KB = int(os.environ.get("PSYCH_WORKER_RSS_LIMIT_KB", "3600000"))
 # Память на паузе: долгий хозяин (гейтвей) живёт часами, и 3.4 ГБ модельного RSS в нём —
 # занятая память, а не тёплый кэш. Модели освобождаются после простоя, процесс остаётся
 # (лексикон + классификатор), следующий запрос вправе загрузить заново.
-NEURAL_IDLE_RELEASE = int(os.environ.get("PSYCH_WORKER_NEURAL_IDLE", "120"))
+# Освобождение на паузе — ОБЩЕЕ для всех слоёв, а не только нейро, поэтому имя — model_idle.
+# Прежнее имя (PSYCH_WORKER_NEURAL_IDLE) принимается как запасной: оно уже стоит в конфигах.
+MODEL_IDLE_RELEASE = int(os.environ.get("PSYCH_WORKER_MODEL_IDLE")
+                         or os.environ.get("PSYCH_WORKER_NEURAL_IDLE", "120"))
 
 
 def current_rss_kb():
@@ -70,21 +73,38 @@ def current_rss_kb():
         return 0
 
 
+def add_memory_note(resp, note):
+    """Заметки об освобождении памяти ОБЪЕДИНЯЮТСЯ, а не перетираются.
+
+    На одном запросе могли произойти два события: освобождение по простою (до запроса,
+    заметка едет в ответе) и guard (на самом запросе). Прежний код писал в `resp["memory"]`
+    дважды — вторая запись затирала первую: при pending 900 МБ и guard на том же запросе
+    доставленный memory показывал только guard, и факт освобождения 900 МБ читатель не
+    видел. Поэтому блок — список событий плюс суммарное освобождение, а не один объект.
+    """
+    mem = resp.setdefault("memory", {"notes": [], "released_kb_total": 0})
+    mem["notes"].append(note)
+    mem["released_kb_total"] += int(note.get("released_kb", 0))
+    return mem
+
+
 def attach_pending(resp, pending):
     """Заметка об освобождении памяти едет В ОТВЕТЕ на запрос, а не отдельной строкой:
     строка, посланная между запросами, сдвинула бы ответы клиента (тот же баг, что и с
     отдельным emit guard)."""
     if not pending:
         return False
-    resp["memory"] = pending
+    add_memory_note(resp, pending)
     return True
 
 
-def idle_release_due(last_neural, now, seconds=None):
+def idle_release_due(last_model_activity, now, seconds=None):
     """Пора освободить модели после простоя (процесс остаётся). Отдельно от guard:
     guard — превышение лимита и постоянный отказ от перезагрузки, здесь — память на
-    паузе, и следующий запрос вправе загрузить модели заново."""
-    return (now - last_neural) >= (NEURAL_IDLE_RELEASE if seconds is None else seconds)
+    паузе, и следующий запрос вправе загрузить заново. Параметр — последний запрос к
+    ЛЮБОМУ модельному слою (search/classify/neural), а не только к нейро: освобождение
+    общее для всех слоёв."""
+    return (now - last_model_activity) >= (MODEL_IDLE_RELEASE if seconds is None else seconds)
 
 
 MODEL_LAYERS = ("embedding", "classifier", "neural")
@@ -111,8 +131,9 @@ def guard_memory(resp, state):
     if not should_release(rss, RSS_LIMIT_KB):
         return False
     freed = release_models(state, rss)
-    resp["memory"] = {"rss_kb": rss, "released_kb": freed, "limit_kb": RSS_LIMIT_KB,
-                      "models_released": True, "rss_did_not_drop": freed == 0}
+    add_memory_note(resp, {"type": "guard", "rss_kb": rss, "released_kb": freed,
+                           "limit_kb": RSS_LIMIT_KB, "models_released": True,
+                           "rss_did_not_drop": freed == 0})
     return True
 
 
@@ -298,7 +319,7 @@ def main():
           "embedding": state["embedding"] is not None,
           "classifier": state["classifier"] is not None,
           "docs": con.execute("SELECT COUNT(*) FROM docs").fetchone()[0],
-          "idle_s": IDLE_TIMEOUT, "model_idle_s": NEURAL_IDLE_RELEASE,
+          "idle_s": IDLE_TIMEOUT, "model_idle_s": MODEL_IDLE_RELEASE,
           "rss_limit_kb": RSS_LIMIT_KB})
 
     ppid0 = os.getppid()
@@ -311,12 +332,12 @@ def main():
         if b"\n" in buf:
             line, buf = buf.split(b"\n", 1)
         else:
-            r, _, _ = select.select([stdin_fd], [], [], min(IDLE_TIMEOUT, NEURAL_IDLE_RELEASE))
+            r, _, _ = select.select([stdin_fd], [], [], min(IDLE_TIMEOUT, MODEL_IDLE_RELEASE))
             if not r:
                 now = time.time()
                 if os.environ.get("PSYCH_WORKER_DEBUG"):
                     sys.stderr.write(f"[idle] now-last_model={now-last_model:.1f} "
-                                     f"idle={IDLE_TIMEOUT} model_idle={NEURAL_IDLE_RELEASE} "
+                                     f"idle={IDLE_TIMEOUT} model_idle={MODEL_IDLE_RELEASE} "
                                      f"loaded={sum(1 for v in state.values() if v)}\n")
                 if now - last_request >= IDLE_TIMEOUT:
                     emit({"ok": False, "error": "idle timeout", "idle_s": IDLE_TIMEOUT})
@@ -327,7 +348,8 @@ def main():
                     # Освобождаем ВСЕ слои, процесс остаётся, и следующий запрос вправе
                     # загрузить заново — это не guard
                     freed = release_models(state)
-                    pending = {"released_kb": freed, "idle_release": True} if freed else None
+                    pending = ({"type": "idle", "released_kb": freed, "idle_release": True}
+                               if freed else None)
                 continue
             chunk = os.read(stdin_fd, 65536)
             if not chunk:

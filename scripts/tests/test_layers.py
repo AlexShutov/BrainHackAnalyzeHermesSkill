@@ -828,10 +828,30 @@ class TestOpenBugs(SnapshotMixin, unittest.TestCase):
                 ro.close()
         finally:
             R.DB_PATH = orig
-        for f in sorted(os.listdir(SCRIPTS)):
-            if f.endswith(".py") and f != "util.py":   # util.py — сам помощник, в его docstring шаблон упомянут намеренно
-                s = read(os.path.join(SCRIPTS, f))
-                self.assertNotIn("json.load(open(", s, f"{f}: незакрытый open()")
+        # Скан обязан ловить ЛЮБУЮ форму незакрытого open(), а не одну запись, и обязан
+        # покрывать оба пути навыка: прежний тест проверял только `json.load(open(` и только
+        # brain-hack-analyze/scripts — путь youtube-content не проверялся вообще, и живой
+        # незакрытый open() в ukr_detect.py проходил тест. `Popen(` и `urlopen(` — не open().
+        rx = re.compile(r"(?<![A-Za-z])open\(")
+
+        def scan(text):
+            return [ln.strip() for ln in text.splitlines()
+                    if rx.search(ln) and "with open(" not in ln]
+
+        # тест обязан ловить подмену, а не только констатировать «сейчас чисто»
+        planted = ('raw = open(a.transcript).read()\n'
+                   'with open(b, "w") as fh:\n    json.dump(c, fh)\n'
+                   'proc = subprocess.Popen([py], stdout=log)\n'
+                   'json.loads(urllib.request.urlopen(req).read())')
+        self.assertEqual(scan(planted), ["raw = open(a.transcript).read()"],
+                         "сканер не ловит подмену — проверка вырождается в «сейчас чисто»")
+        for base in (SCRIPTS, YT):
+            for f in sorted(os.listdir(base)):
+                if not f.endswith(".py") or f == "util.py":
+                    continue   # util.py — сам помощник, в его docstring шаблон упомянут намеренно
+                bad = scan(read(os.path.join(base, f)))
+                self.assertFalse(bad, f"{os.path.relpath(os.path.join(base, f), SKILL)}: "
+                                      f"незакрытый open() — {bad[:2]}")
 
     def test_skill_dictionaries_have_no_latin_homoglyphs(self):
         """Поведение: homoglyph внутри кириллического слова не даёт синтаксической ошибки —
@@ -1794,8 +1814,10 @@ class WorkerLifecycleTests(SnapshotMixin, unittest.TestCase):
         resp = {"ok": True, "markers": []}
         w.current_rss_kb = lambda: w.RSS_LIMIT_KB + 1000
         self.assertTrue(w.guard_memory(resp, state))
-        self.assertEqual(resp["memory"]["released_kb"], 0)
-        self.assertTrue(resp["memory"]["rss_did_not_drop"])
+        mem = resp["memory"]
+        self.assertEqual(mem["notes"][0]["released_kb"], 0)
+        self.assertTrue(mem["notes"][0]["rss_did_not_drop"])
+        self.assertEqual(mem["released_kb_total"], 0)
         self.assertTrue(all(v is None for v in state.values()))
 
     def test_guard_counts_rss_once_per_request(self):
@@ -1814,9 +1836,11 @@ class WorkerLifecycleTests(SnapshotMixin, unittest.TestCase):
         w.current_rss_kb = fake
         self.assertTrue(w.guard_memory(resp, state))
         self.assertEqual(len(calls), 2)          # проверка + замер после gc, не дважды для проверки
-        self.assertEqual(resp["memory"]["rss_kb"], w.RSS_LIMIT_KB + 1000)
-        self.assertEqual(resp["memory"]["released_kb"], 1500)
-        self.assertFalse(resp["memory"]["rss_did_not_drop"])
+        n = resp["memory"]["notes"][0]
+        self.assertEqual(n["rss_kb"], w.RSS_LIMIT_KB + 1000)
+        self.assertEqual(n["released_kb"], 1500)
+        self.assertFalse(n["rss_did_not_drop"])
+        self.assertEqual(resp["memory"]["released_kb_total"], 1500)
 
     def test_neural_gate_released_beats_empty_state(self):
         """Пустой dict после освобождения читается как «загрузить заново» — это вернуло бы
@@ -1894,6 +1918,26 @@ class WorkerLifecycleTests(SnapshotMixin, unittest.TestCase):
         self.assertIn("memory", resp)
         # после освобождения по простою перезагрузка разрешена: released (guard) не ставится
         self.assertEqual(w.neural_gate({}, False), "load")
+
+    def test_memory_notes_merge_not_overwrite(self):
+        """Два события на одном запросе — освобождение по простою (pending) и guard —
+        обязаны быть видны ОБА. Прежний код писал в `resp["memory"]` дважды: вторая запись
+        затирала первую, и при pending 900 МБ доставленный memory показывал только guard
+        (`released_kb: 0`) — читатель не видел факт освобождения 900 МБ."""
+        w = importlib.import_module("worker")
+        state = {"embedding": object(), "classifier": None,
+                 "neural": {"x": object()}, "matrix": None}
+        resp = {"ok": True, "markers": []}
+        w.current_rss_kb = lambda: w.RSS_LIMIT_KB + 1000
+        self.assertTrue(w.attach_pending(resp, {"type": "idle", "released_kb": 900_000,
+                                                "idle_release": True}))
+        self.assertTrue(w.guard_memory(resp, state))
+        mem = resp["memory"]
+        self.assertEqual(len(mem["notes"]), 2, "заметки перетираются, а не объединяются")
+        self.assertIn("idle_release", mem["notes"][0])
+        self.assertTrue(mem["notes"][1]["models_released"])
+        self.assertEqual(mem["released_kb_total"], 900_000,
+                         "сумма обязана включать факт освобождения по простою")
 
     def test_client_registers_atexit(self):
         """Выход процесса-хозяина обязан забирать worker с собой."""

@@ -60,7 +60,8 @@ def main():
             shutil.copy(os.path.join(staging, f), os.path.join(MODELS, f))
     st["status"] = "promoted"
     st["promoted_at"] = __import__("datetime").datetime.now().isoformat(timespec="seconds")
-    json.dump(st, open(STATE, "w", encoding="utf-8"), ensure_ascii=False, indent=2)
+    with open(STATE, "w", encoding="utf-8") as fh:
+        json.dump(st, fh, ensure_ascii=False, indent=2)
     print(json.dumps({"status": "promoted", "model": st["candidate"]["model_id"],
                       "agreement": st.get("agreement")}, ensure_ascii=False))
     return 0

@@ -126,9 +126,9 @@ def main():
     if not a.dry_run:
         save_state(state)
         os.makedirs(STAGING, exist_ok=True)
-        proc = subprocess.Popen([py, os.path.join(HERE, "model_update_run.py")],
-                                stdout=open(os.path.join(STAGING, "update.log"), "w"),
-                                stderr=subprocess.STDOUT)
+        with open(os.path.join(STAGING, "update.log"), "w", encoding="utf-8") as log:
+            proc = subprocess.Popen([py, os.path.join(HERE, "model_update_run.py")],
+                                    stdout=log, stderr=subprocess.STDOUT)
         state["status"] = "updating"
         state["pid"] = proc.pid
         state["staging"] = STAGING

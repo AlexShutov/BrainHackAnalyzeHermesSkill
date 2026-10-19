@@ -216,7 +216,8 @@ def main():
                            "nonru_share_items": round(share_items, 3),
                            "insertions": ins}
     if a.transcript:
-        raw = open(a.transcript).read()
+        with open(a.transcript, encoding="utf-8") as fh:
+            raw = fh.read()
         # строки вида "0:12 текст" — группируем по абзацам-строкам
         paras = [l for l in raw.splitlines() if l.strip()]
         texts = [re.sub(r"^\d+:\d+(:\d+)?\s*", "", l) for l in paras]
