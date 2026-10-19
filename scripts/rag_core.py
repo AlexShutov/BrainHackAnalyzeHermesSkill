@@ -44,6 +44,9 @@ def open_db(readonly=True):
     CREATE TABLE остаётся только в пути построения (там, где есть право на запись)."""
     if readonly and os.path.exists(DB_PATH):
         return sqlite3.connect(f"file:{DB_PATH}?mode=ro", uri=True)
+    parent = os.path.dirname(DB_PATH)
+    if parent:
+        os.makedirs(parent, exist_ok=True)   # чистая установка: каталога rag/ ещё нет
     con = sqlite3.connect(DB_PATH)
     con.execute("CREATE TABLE IF NOT EXISTS docs(id INTEGER PRIMARY KEY, kind TEXT, label TEXT, text TEXT)")
     con.execute("CREATE TABLE IF NOT EXISTS vec(id INTEGER PRIMARY KEY REFERENCES docs(id), blob BLOB)")

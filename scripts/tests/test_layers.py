@@ -853,6 +853,31 @@ class TestOpenBugs(SnapshotMixin, unittest.TestCase):
                 self.assertFalse(bad, f"{os.path.relpath(os.path.join(base, f), SKILL)}: "
                                       f"незакрытый open() — {bad[:2]}")
 
+    def test_state_dir_created_on_first_run(self):
+        """Чистая установка: каталога rag/ ещё нет — прежний open_db падал с
+        'unable to open database file' (база не создавалась вообще). Фикс создаёт
+        родительский каталог. Тест обязан падать на прежнем коде, а не просто констатировать.
+        """
+        fresh = os.path.join(tempfile.mkdtemp(), "psychology", "rag", "psych.db")
+        self.assertFalse(os.path.isdir(os.path.dirname(fresh)),
+                         "тест строит именно отсутствующий каталог — иначе он ничего не проверяет")
+        orig = R.DB_PATH
+        R.DB_PATH = fresh
+        try:
+            con = R.open_db(readonly=False)
+            try:
+                self.assertTrue(os.path.isdir(os.path.dirname(fresh)),
+                                "каталог не создан — индекс на чистой установке не строится")
+                con.execute("CREATE TABLE IF NOT EXISTS docs(id INTEGER PRIMARY KEY, kind TEXT, label TEXT, text TEXT)")
+                con.execute("INSERT INTO docs(kind,label,text) VALUES('device','Ложная дилемма','x')")
+                con.commit()
+                self.assertEqual(con.execute("SELECT count(*) FROM docs").fetchone()[0], 1,
+                                 "схема не создаётся на fresh-инсталле")
+            finally:
+                con.close()
+        finally:
+            R.DB_PATH = orig
+
     def test_skill_dictionaries_have_no_latin_homoglyphs(self):
         """Поведение: homoglyph внутри кириллического слова не даёт синтаксической ошибки —
         слово просто никогда не совпадёт, и правило молча перестаёт работать. Тест вставляет
