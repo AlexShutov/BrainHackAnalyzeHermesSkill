@@ -264,14 +264,19 @@ def tag(text, cat, scores, device=None):
     return "🙂"
 
 
-def analyze(rows, runner=None, device_by_text=None, use_neural=True, use_markers=True):
+def analyze(rows, runner=None, device_by_text=None, use_neural=True, use_markers=True,
+           partial=None):
     """rows — каноническая форма комментария. device_by_text — {текст: имя приёма}
     от маркерного слоя (для строки «приём»); без него приём не называется, и тег
     не ставится: правило требует уверенного вердикта, а не совпадения слов.
 
     `use_neural=False` — явный лексикон (для сверки цифр); `runner` — готовый прогон,
     иначе берётся тёплый neural_runner(). `use_markers=False` — не запускать маркерный
-    слой (для сверки цифр)."""
+    слой (для сверки цифр).
+
+    `partial` — {"fetched": N, "analyzed": M} (M < N): анализ сделан по срезу (--limit)
+    или по неполному кэшу. Правило пользователя: доставляемые числа обязаны называть,
+    что выборка неполная, а не выдавать её за все комментарии. block() печатает строку."""
     texts = [r.get("text") or "" for r in rows]
     if device_by_text is None and use_markers:
         device_by_text = {t: device_pairs(t) for t in texts}
@@ -341,7 +346,7 @@ def analyze(rows, runner=None, device_by_text=None, use_neural=True, use_markers
             "neural_released": neural_released, "count": len(rows),
             "mood": mood_pct, "cross_check": cross_pct, "overall": overall,
             "weighted": weighted, "threads": thread_lines, "comments": tagged,
-            "unmapped": unmapped}
+            "unmapped": unmapped, "partial": partial}
 
 
 def block(res):
@@ -350,6 +355,14 @@ def block(res):
     lines = [f"Настроение комментариев ({res['count']}): " +
             ", ".join(f"{c} {p}%" for c, p in res["mood"].items()) +
             f". Слой: {res['layer']}."]
+    p = res.get("partial")
+    if p:
+        # правило: неполная выборка называется, а не подаётся как все комментарии
+        if p.get("note"):
+            lines.append("Выборка может быть неполной: " + p["note"])
+        else:
+            lines.append(f"Выборка неполная: {p['analyzed']} из {p['fetched']} — "
+                         f"числа по этой выборке, не по всем комментариям.")
     if res.get("unmapped"):
         # честность: если у метки модели нет корзины, число по этому комментату
         # получил словарь — об этом говорится отдельной строкой, а не молча

@@ -44,8 +44,15 @@ except Exception:
 # числе импортированным внутри теста), и восстанавливается в tearDown — «забыть finally»
 # становится невозможным, а не зависимым от аккуратности конкретного теста.
 def skill_modules():
+    """Снимок обязан покрывать ВСЕ модули навыка, а не только brain-hack-analyze/scripts.
+    Прежний фильтр ловил только SCRIPTS — модули youtube-content (comment_analysis,
+    comment_sentiment, fetch_comments, neural_pass, status_post, telegram_comments) не
+    восстанавливались, и spy-тест оставлял подмену на следующие тесты: тест блока
+    комментаторов падал не по своей логике, а по порядку запуска; тест worker-жизненного
+    цикла падал из-за подменённого neural_pass. Плагин тоже модуль навыка."""
+    roots = (SCRIPTS, YT, os.path.join(SKILL, "plugin"))
     return {n: m for n, m in sys.modules.items()
-            if (getattr(m, "__file__", "") or "").startswith(SCRIPTS)}
+            if any((getattr(m, "__file__", "") or "").startswith(r) for r in roots)}
 
 
 class SnapshotMixin:
@@ -269,6 +276,120 @@ class TestFixed(SnapshotMixin, unittest.TestCase):
         self.assertIn("ничего не найдено", res["content"][0]["text"])
 
 # --- B. правила, которые кодом не реализованы (падают) -----------------------
+    def test_partial_cache_is_not_delivered_as_full_set_when_all_requested(self):
+        """Поведение: полнота кэша проверяется ФЛАГОМ complete, а не только размером
+        (правило навыка + собственный docstring модуля). Кэш, записанный со срезом
+        --limit, при запросе «все» (limit=0) обязан перекачиваться; если перекачка
+        не удалась, выборка называется неполной, а не подаётся как полная."""
+        import fetch_comments as FC
+        cache = tempfile.mkdtemp()
+        calls = []
+
+        def runner(url):
+            calls.append(url)
+            return {"title": "T", "webpage_url": url,
+                    "comments": [{"id": f"R{i}", "parent": None, "author": "a",
+                                  "text": f"текст {i}", "like_count": i}
+                                 for i in range(3)]}
+
+        url = "https://youtu.be/ccccccccccc"
+        meta, comments, hit = FC.fetch(url, limit=3, runner=runner, cache_dir=cache)
+        self.assertFalse(meta.get("complete"),
+                         "кэш, записанный со срезом --limit, не может быть полным")
+        meta2, comments2, hit2 = FC.fetch(url, limit=0, runner=runner, cache_dir=cache)
+        self.assertEqual(len(calls), 2,
+                         "неполный кэш при запросе «все» обязан вызвать перекачивание")
+
+        # полный кэш (писали без среза) — попадание без сети
+        cache2 = tempfile.mkdtemp()
+        meta3, c3, hit3 = FC.fetch(url, limit=0, runner=runner, cache_dir=cache2)
+        self.assertTrue(meta3.get("complete"), "кэш без среза обязан быть полным")
+        before = len(calls)
+        meta4, c4, hit4 = FC.fetch(url, limit=0, runner=runner, cache_dir=cache2)
+        self.assertTrue(hit4, "полный кэш обязан работать без сети")
+        self.assertEqual(len(calls), before,
+                         "попадание в полный кэш не имеет права вызывать транспорт")
+
+        # перекачка не удалась — partial обязан называться, а не молчать
+        # (отдельный каталог: в `cache` неполный кэш уже был перезаписан успешной
+        # перекачкой выше, и там выборка стала полной)
+        cache3 = tempfile.mkdtemp()
+        FC.fetch(url, limit=3, runner=runner, cache_dir=cache3)
+
+        def boom(url):
+            raise RuntimeError("network down")
+        meta5, c5, hit5 = FC.fetch(url, limit=0, runner=boom, cache_dir=cache3)
+        self.assertTrue(hit5, "неудачная перекачка возвращает то, что лежит в кэше")
+        self.assertTrue(meta5.get("partial"),
+                        "неполная выборка обязана быть названа в мете")
+        self.assertEqual(meta5["partial"]["analyzed"], len(c5))
+        self.assertEqual(meta5["partial"]["fetched"], 3)
+
+    def test_delivered_comment_block_names_partial_sample(self):
+        """Поведение: правило — доставляемые числа обязаны называть неполную выборку
+        (срез по --limit или неполный кэш), а не выдавать её за все комментарии."""
+        rows = [{"id": "1", "parent": "root", "author": "a", "text": "класс",
+                 "likes": 0, "timestamp": 0, "pinned": False}]
+        res = CA.analyze(rows, use_neural=False, partial={"fetched": 10, "analyzed": 1})
+        b = CA.block(res)
+        self.assertIn("неполная", b, "блок молчит о неполной выборке")
+        self.assertIn("1 из 10", b)
+        res2 = CA.analyze(rows, use_neural=False)
+        self.assertNotIn("неполная", CA.block(res2),
+                        "строка о неполной выборке не имеет права появляться, когда она полна")
+        # случай, где полнота не подтверждена (кэш из ограниченного качания):
+        # числа равны, но набор нельзя называть полным — блок обязан это сказать
+        res3 = CA.analyze(rows, use_neural=False,
+                          partial={"fetched": 3, "analyzed": 3,
+                                   "note": "кэш из ограниченного качания (--limit)"})
+        self.assertIn("может быть неполной", CA.block(res3),
+                      "блок молчит о неподтверждённой полноте")
+
+    def test_comment_sentiment_passes_the_slice_to_the_block(self):
+        """Поведение: --limit обрезает только вывод, и срез обязан доходить до блока
+        как неполная выборка (fetched > analyzed). Тест без сети: транспорт подменён,
+        CA.analyze — spy (SnapshotMixin восстанавливает)."""
+        import comment_sentiment as CS
+        seen = {}
+        real_analyze = CA.analyze
+
+        def spy(rows, **kw):
+            seen.update(kw)
+            return real_analyze(rows, use_neural=False)
+
+        CA.analyze = spy
+        CS.fetch_info = lambda url: {"title": "T", "webpage_url": url,
+                                     "comments": [{"id": f"R{i}", "parent": None,
+                                                   "author": "a", "text": "текст"}
+                                                  for i in range(10)]}
+        argv = sys.argv
+        sys.argv = ["comment_sentiment.py", "https://youtu.be/ccccccccccc",
+                    "--limit", "3", "--json"]
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            CS.main()
+        sys.argv = argv
+        out = json.loads(buf.getvalue())
+        self.assertEqual(out["comments"], 3)
+        self.assertEqual(seen.get("partial"), {"fetched": 10, "analyzed": 3},
+                         "срез по --limit обязан доходить до блока как неполная выборка")
+        self.assertEqual(out.get("partial"), {"fetched": 10, "analyzed": 3})
+
+    def test_snapshot_covers_youtube_path_modules(self):
+        """Поведение: снимок обязан покрывать оба пути навыка. Прежний skill_modules()
+        фильтровал только brain-hack-analyze/scripts — модули youtube-content
+        (comment_analysis, comment_sentiment, fetch_comments, neural_pass) не
+        восстанавливались, и spy-тест оставлял подмену на следующие тесты: тест блока
+        комментаторов падал по порядку запуска, а не по своей логике. Кейс, где «как есть»
+        и «по правилу» дают разный результат: подмена видна до tearDown и обязана
+        исчезнуть после него."""
+        orig = CA.analyze
+        CA.analyze = lambda *a, **k: None
+        self.assertIsNone(CA.analyze([]), "подмена обязана быть видна до восстановления")
+        self.tearDown()
+        self.assertIs(CA.analyze, orig,
+                      "модуль youtube-content не восстанавливается — тесты влияют друг на друга")
+
 class TestOpenBugs(SnapshotMixin, unittest.TestCase):
     def test_plugin_gate_equals_platform_limit(self):
         """Поведение: сообщение 4061 символа с 2 абзацами проходит гейт, 4121 — отклоняется;

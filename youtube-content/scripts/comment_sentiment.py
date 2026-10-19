@@ -189,6 +189,22 @@ def format_text(res, rows):
     return "\n".join(out)
 
 
+def fetch_info(url, runner=None):
+    """Транспорт комментариев. `runner` подменяется mock-транспортом в тестах — без
+    этого путь не тестируется offline (правило: сетевой скрипт становится тестируемым
+    только когда у него есть offline/dry-run режим и mock-transport в тесте)."""
+    return (runner or run_ytdlp)(url)
+
+
+def run_ytdlp(url):
+    cmd = [sys.executable, "-m", "yt_dlp", "--skip-download", "--write-comments",
+           "-j", url]
+    r = subprocess.run(cmd, capture_output=True, text=True, timeout=1500)
+    if r.returncode != 0:
+        raise SystemExit(f"yt-dlp failed: {r.stderr.strip()[:500]}")
+    return json.loads(r.stdout)
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("url")
@@ -198,20 +214,19 @@ def main():
                     help="только лексикон (для сверки цифр); по умолчанию нейро-слой")
     args = ap.parse_args()
 
-    cmd = [sys.executable, "-m", "yt_dlp", "--skip-download", "--write-comments",
-           "-j", args.url]
-    r = subprocess.run(cmd, capture_output=True, text=True, timeout=1500)
-    if r.returncode != 0:
-        print("yt-dlp failed:", r.stderr.strip()[:500], file=sys.stderr)
-        sys.exit(1)
-    info = json.loads(r.stdout)
+    info = fetch_info(args.url)
     comments = info.get("comments")
     if comments is None:
         print("No comments available (disabled on this video or fetch failed).",
               file=sys.stderr)
         sys.exit(2)
+    total = len(comments)
     if args.limit:
         comments = comments[:args.limit]
+    # правило: доставляемые числа обязаны называть неполную выборку (срез по --limit),
+    # а не выдавать её за все комментарии
+    partial = ({"fetched": total, "analyzed": len(comments)}
+               if total > len(comments) else None)
 
     # classify
     rows = []
@@ -227,14 +242,14 @@ def main():
     # где нейро применялся, и Telegram/Rutube доставляли числа по лексикону — пути
     # расходились. Здесь все три пути идут через один модуль.
     import comment_analysis as CA
-    res = CA.analyze(rows, use_neural=not args.no_neural)
+    res = CA.analyze(rows, use_neural=not args.no_neural, partial=partial)
     n = len(rows)
     mood = res["mood"]
     thread_lines, overall_hom, weighted_hom = res["threads"], res["overall"], res["weighted"]
 
     if args.json:
         print(json.dumps({"title": info.get("title"), "url": info.get("webpage_url"),
-                          "comments": n, "layer": res["layer"], "mood": mood,
+                          "comments": n, "partial": partial, "layer": res["layer"], "mood": mood,
                           "cross_check": res["cross_check"],
                           "homogeneity_overall": overall_hom,
                           "homogeneity_weighted": weighted_hom,

@@ -10,8 +10,13 @@ Prints one JSON object per comment: {id, parent, author, text, likes, timestamp,
 Кэш: полученный по video id набор лежит в scratch, повторный анализ того же видео его
 не перекачивает. Ограничение инструмента (проверено на --help этой версии yt-dlp):
 ограничения качания комментариев нет (--max-comments отсутствует), поэтому --limit
-обрезает только вывод, а полнота набора проверяется размером кэша, а не флагом —
-yt-dlp не сообщает, остановился ли он сам.
+обрезает только вывод. Полнота проверяется флагом `complete` в мете кэша: он ставится
+только когда кэш писали без среза. Прежняя проверка по размеру (`len(cached) >= limit`)
+при limit=0 принимала любой кэш за полный набор — частичный кэш доставлялся как «все
+комментарии», и анализ считался по неполной выборке. Теперь: неполный кэш + запрос «все»
+→ перекачиваем; если перекачка не удалась, выборка называется неполной (partial) и в
+блоке анализа, и в выводе скрипта. yt-dlp сам не сообщает, остановился ли он, поэтому
+flag отражает то, как кэш был записан, а не обещание инструмента.
 """
 import argparse, json, os, re, subprocess, sys
 
@@ -76,10 +81,23 @@ def normalize(info):
     return out
 
 
+def write_cache(path, meta, comments, complete):
+    meta = dict(meta, complete=bool(complete), comments=comments)
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(meta, f, ensure_ascii=False)
+    return meta
+
+
 def fetch(url, limit=0, runner=None, cache_dir=None):
     """Возвращает (meta, comments, cache_hit). limit=0 — все.
-    Кэш покрывает запрос только если в нём достаточно комментариев; иначе перекачиваем —
-    молча выдавать partial за полный набор нельзя (полнота проверяется размером, флага нет).
+    Полнота кэша проверяется ФЛАГОМ complete, а не только размером. Прежняя проверка
+    `len(cached) >= limit` при limit=0 принимала любой кэш за полный набор: кэш,
+    записанный с --limit 3, доставлялся как «все комментарии», и анализ считался по
+    неполной выборке, противореча собственному docstring этого модуля.
+
+    Правило: неполный кэш + запрос «все» → перекачиваем; если перекачка не удалась,
+    возвращаем кэш с пометкой partial — числа по неполной выборке называются в блоке,
+    а не подаются как полные. `runner` — транспорт (для тестов подменяется mock-транспортом).
     """
     cache_dir = cache_dir or CACHE_DIR
     vid = video_id(url)
@@ -88,17 +106,35 @@ def fetch(url, limit=0, runner=None, cache_dir=None):
         with open(path, encoding="utf-8") as f:
             data = json.load(f)
         cached = data.get("comments") or []
-        if not limit or len(cached) >= limit:
+        if (limit and len(cached) >= limit) or (not limit and data.get("complete")):
             return data, (cached[:limit] if limit else cached), True
+        try:
+            info = (runner or run_ytdlp)(url)
+        except Exception as e:
+            # полнота не подтверждена: кэш записали из ограниченного качания, и yt-dlp
+            # не сообщает, остановился ли он сам — это нельзя выдавать за полный набор
+            data["partial"] = {"fetched": data.get("fetched") or len(cached),
+                               "analyzed": len(cached),
+                               "note": "кэш записан из ограниченного качания (--limit); "
+                                       "полный набор не подтверждён"}
+            data["partial_note"] = f"полный fetch не удался ({e})"
+            return data, cached, True
+        comments = normalize(info)
+        meta = {"video_id": vid, "title": info.get("title"),
+                "url": info.get("webpage_url") or url, "fetched": len(comments)}
+        if path:
+            return write_cache(path, meta, comments, complete=True), comments, False
+        return meta, comments, False
     info = (runner or run_ytdlp)(url)
     comments = normalize(info)
     meta = {"video_id": vid, "title": info.get("title"),
-            "url": info.get("webpage_url") or url, "fetched": len(comments)}
+            "url": info.get("webpage_url") or url, "fetched": len(comments),
+            # кэш полон только когда писали без среза: срез --limit — это partial-набор
+            "complete": not limit}
     if path:
         os.makedirs(cache_dir, exist_ok=True)
-        with open(path, "w", encoding="utf-8") as f:
-            json.dump(dict(meta, comments=comments), f, ensure_ascii=False)
-    return meta, (comments[:limit] if limit else comments), False
+        return write_cache(path, meta, comments, complete=not limit), comments, False
+    return meta, comments, False
 
 
 def main():
@@ -120,11 +156,18 @@ def main():
         meta, comments, hit = fetch(args.url, args.limit, cache_dir=args.cache_dir)
     if hit:
         print(f"cache hit: {meta.get('video_id')} ({len(comments)} из кэша)", file=sys.stderr)
+        if meta.get("partial"):
+            # правило: неполная выборка называется, а не подаётся как полный набор
+            print(f"выборка неполная: {meta['partial']['analyzed']} из "
+                  f"{meta['partial']['fetched']} — {meta.get('partial_note', '')}",
+                  file=sys.stderr)
 
     if args.json:
         print(json.dumps({"title": meta.get("title"), "url": meta.get("url"),
                           "video_id": meta.get("video_id"), "count": len(comments),
-                          "cached": hit, "comments": comments}, ensure_ascii=False))
+                          "complete": bool(meta.get("complete")),
+                          "partial": meta.get("partial"), "cached": hit,
+                          "comments": comments}, ensure_ascii=False))
     else:
         for c in comments:
             print(json.dumps(c, ensure_ascii=False))
