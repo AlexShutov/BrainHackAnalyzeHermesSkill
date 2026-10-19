@@ -1469,6 +1469,43 @@ class CommentAnalysisTests(SnapshotMixin, unittest.TestCase):
         self.assertEqual(sum(nums(cross_line)), 100,
                          f"кросс-проверка не складывается в 100: {cross_line}")
 
+    def test_cross_check_only_when_the_layer_is_neural(self):
+        """Кросс-проверка имеет смысл только когда доставляемые числа дал нейро-слой.
+        Когда слой и есть лексикон, это второй проход по тому же словарю — мёртвая
+        работа, и блок печатал «кросс-проверку», которая повторяет те же числа:
+        читатель видит сверку, которой нет. Проверка поведением — spy-счётчик вызовов
+        лексикона: на лексикон-пути обязан быть ОДИН вызов на комментарий (прежний код
+        делал два — слой и сверку), на нейро-пути — один (сверка), и блок при лексиконе
+        не печатает строку сверки."""
+        import comment_analysis as CA
+        import comment_sentiment as CS
+        real = CS.classify
+        calls = []
+
+        def spy(text):
+            calls.append(text)
+            return real(text)
+
+        rows = [{"id": "1", "parent": "root", "author": "a",
+                 "text": "злая бешеная критика без фактов", "likes": 0}]
+        CS.classify = spy
+        try:
+            res = CA.analyze(rows, use_neural=False, use_markers=False)
+            self.assertIsNone(res["cross_check"], "лексикон сверяет сам себя")
+            self.assertEqual(len(calls), 1,
+                             "второй проход по тому же словарю")
+            self.assertNotIn("Кросс-проверка", CA.block(res),
+                             "блок выдаёт сверку, которой не было")
+            calls.clear()
+            res2 = CA.analyze(rows, runner=self.fake_runner(), use_markers=False)
+            self.assertIsNotNone(res2["cross_check"],
+                                 "сверка пропала там, где она нужна")
+            self.assertEqual(len(calls), 1, "сверка обязана считать лексикон")
+            self.assertIn("Кросс-проверка", CA.block(res2))
+        finally:
+            CS.classify = real
+
+
 
     def test_all_three_paths_use_the_same_entry_point(self):
         import comment_analysis as CA
@@ -1487,7 +1524,11 @@ class CommentAnalysisTests(SnapshotMixin, unittest.TestCase):
             lex = CA.analyze(self.ROWS, use_neural=False)
             self.assertEqual(lex["layer"], "lexicon",
                              "без моделей слой обязан честно сообщить, что работает лексиконом")
-            self.assertEqual(lex["mood"], lex["cross_check"])
+            # лексикон не сверяет сам себя: на лексикон-пути cross_check отсутствует
+            # (прежний код делал второй проход по тому же словарю и печатал «сверку»,
+            # которая повторяла те же числа)
+            self.assertIsNone(lex["cross_check"],
+                              "лексикон сверяет сам себя и выдаёт это как сверку")
         finally:
             CA.neural_runner = real
 

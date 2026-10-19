@@ -246,8 +246,7 @@ def analyze(rows, runner=None, device_by_text=None, use_neural=True, use_markers
     cats = []
     unmapped = []
     for i, r in enumerate(rows):
-        lex_cat, _ = CS.classify(r.get("text") or "")
-        cat = lex_cat
+        text = r.get("text") or ""
         if scores and scores.get("emotion") and scores["emotion"][i]:
             top = max(scores["emotion"][i].items(), key=lambda kv: kv[1])
             if top[0] in NEURAL_BUCKET:
@@ -255,7 +254,10 @@ def analyze(rows, runner=None, device_by_text=None, use_neural=True, use_markers
             else:
                 # метка модели без корзины: число по этому комментату получил словарь,
                 # и об этом говорится в доставляемом блоке — молча смешивать слои нельзя
+                cat = CS.classify(text)[0]
                 unmapped.append(top[0])
+        else:
+            cat = CS.classify(text)[0]
         cats.append(cat)
 
     mood = {}
@@ -263,11 +265,17 @@ def analyze(rows, runner=None, device_by_text=None, use_neural=True, use_markers
         mood[c] = mood.get(c, 0) + 1
     mood_pct = CS.percentages(mood)
 
-    cross = {}
-    for r in rows:
-        lex_cat, _ = CS.classify(r.get("text") or "")
-        cross[lex_cat] = cross.get(lex_cat, 0) + 1
-    cross_pct = CS.percentages(cross)
+    # Кросс-проверка имеет смысл только когда доставляемые числа дал нейро-слой.
+    # Раньше она считалась всегда: когда слой и есть лексикон, это второй проход по
+    # тому же словарю (мёртвая работа), и блок печатал «кросс-проверку», которая
+    # просто повторяет те же самые числа — читатель видит сверку, которой нет.
+    cross_pct = None
+    if scores:
+        cross = {}
+        for r in rows:
+            lex_cat, _ = CS.classify(r.get("text") or "")
+            cross[lex_cat] = cross.get(lex_cat, 0) + 1
+        cross_pct = CS.percentages(cross)
 
     tagged = []
     for i, r in enumerate(rows):
@@ -297,7 +305,7 @@ def block(res):
         # получил словарь — об этом говорится отдельной строкой, а не молча
         lines.append("Часть цифр получена лексиконом: метка модели без корзины — "
                      + ", ".join(sorted(set(res["unmapped"]))) + f" ({len(res['unmapped'])})")
-    if res["layer"] == "neural":
+    if res["layer"] == "neural" and res.get("cross_check"):
         lines.append("Кросс-проверка лексиконом: " +
                      ", ".join(f"{c} {p}%" for c, p in res["cross_check"].items()))
     elif res.get("neural_unavailable"):
