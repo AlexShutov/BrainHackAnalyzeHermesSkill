@@ -83,15 +83,21 @@ check("classifier answers unavailable on the clean copy",
 env2 = dict(os.environ, PSYCH_WORKER_NO_MODELS="1", PSYCH_WORKER_IDLE="5")
 p = subprocess.Popen([PY, str(scripts / "worker.py")], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                      text=True, env=env2)
-p.stdin.write(json.dumps({"op": "hello"}) + "\n"); p.stdin.flush()
-hello = json.loads(p.stdout.readline())
-p.stdin.write(json.dumps({"op": "search", "text": "ложная дилемма", "chunk": 1500}) + "\n"); p.stdin.flush()
+banner = json.loads(p.stdout.readline())          # приветствие печатается при старте
+p.stdin.write(json.dumps({"op": "ping"}) + "\n"); p.stdin.flush()
+ping = json.loads(p.stdout.readline())
+p.stdin.write(json.dumps({"op": "search", "query": "ложная дилемма", "chunks": ["ложная дилемма"]}) + "\n")
+p.stdin.flush()
 search = json.loads(p.stdout.readline())
 p.stdin.write(json.dumps({"op": "markers", "text": "мы все знаем, что это правда"}) + "\n"); p.stdin.flush()
 mk = json.loads(p.stdout.readline())
+p.stdin.write(json.dumps({"op": "bogus"}) + "\n"); p.stdin.flush()
+bogus = json.loads(p.stdout.readline())
 p.stdin.close(); p.wait(timeout=10)
-check("clean-copy worker answers ops via one process", hello.get("ok") and search.get("ok") and mk.get("ok"),
-      f"search top={search.get('top')!r}")
+check("clean-copy worker answers ops via one process",
+      banner.get("ok") and ping.get("ok") and search.get("ok") and search.get("results") and mk.get("ok"),
+      f"docs={banner.get('docs')} search top={search.get('results', [{}])[0].get('label')!r}")
+check("unknown op still answers error", bogus.get("ok") is False and bogus.get("error"), str(bogus)[:90])
 check("clean-copy worker exits on EOF (rc 0)", p.returncode == 0, f"rc={p.returncode}")
 
 # 6. tests on the clean copy

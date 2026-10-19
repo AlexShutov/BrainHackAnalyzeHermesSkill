@@ -104,12 +104,29 @@ def run_classifier(text, extra=()):
     sys.argv = argv
     return json.loads(buf.getvalue())
 
+def fake_model(labels=None, thresh=None):
+    """Тест логики обязан работать без установленной модели: на чистой копии labels.txt и
+    thresholds.npy отсутствуют (их создаёт model_setup.py при установке), и тест, который
+    проверяет поведение классификатора, не может зависеть от того, скачана ли модель у
+    тестировщика. Подмена каталога + обход проверки доступности; всё восстанавливается
+    SnapshotMixin."""
+    classifier.models_available = lambda: True
+    if labels is not None:
+        classifier.LABELS = labels
+    elif classifier.LABELS is None:
+        classifier.LABELS = ["Doubt", "Appeal_to_Time", "Other"]
+    if thresh is not None:
+        classifier.THRESH = np.array(thresh)
+    elif classifier.THRESH is None:
+        classifier.THRESH = np.array([0.47, 0.58, 0.50])
+
 # --- A. регрессия на исправленном --------------------------------------------
 class TestFixed(SnapshotMixin, unittest.TestCase):
     def setUp(self):
         super().setUp()
         classifier.session = lambda: FakeSession()
         classifier.tokenizer = lambda: FakeTok()
+        fake_model()
 
     def test_hit_carries_paragraph_index(self):
         text = "читатель видит только цену и не видит качество товара\n\nтот же автор говорит про цену и качество и снова не видит проблему"
@@ -629,6 +646,7 @@ class TestOpenBugs(SnapshotMixin, unittest.TestCase):
                 return [np.array([logits])]
         classifier.session = lambda: FixedSession({"Doubt": 0.60, "Appeal_to_Time": 0.80})
         classifier.tokenizer = lambda: FakeTok()
+        fake_model()
         plain = {r["label"] for r in classifier.classify("абзац")}
         self.assertIn("Doubt", plain, "без min_conf порога 0.47 достаточно p=0.60")
         strict = {r["label"] for r in classifier.classify("абзац", min_conf=0.70)}
@@ -655,6 +673,7 @@ class TestOpenBugs(SnapshotMixin, unittest.TestCase):
                 return [np.array([logits])]
         classifier.session = lambda: FixedSession({"Doubt": 0.60, "Appeal_to_Time": 0.80})
         classifier.tokenizer = lambda: FakeTok()
+        fake_model()
         labels = {l["label"] for r in run_classifier("абзац")["classification"] for l in r["labels"]}
         self.assertNotIn("Doubt", labels,
                         "CLI без --min применяет только порог 0.47 — рабочая точка не применяется")
@@ -1283,6 +1302,18 @@ class RagPathTests(SnapshotMixin, unittest.TestCase):
             ("device", "Ошибка выжившего", "я заработал, значит метод работает"),
             ("chunk", "Книга — Глава 1", "автор говорит: либо мы, либо они — это ложная дилемма выбора"),
             ("chunk", "Книга — Глава 2", "гарантированная доходность без риска противоречит теории")]
+
+    def test_plugin_does_not_leave_skill_path_in_sys_path(self):
+        """Поведение: плагин вставляет путь scripts навыка в sys.path и обязан снимать его
+        после импорта. Прежний постоянный insert(0) засоряет общий процесс: любой поздний
+        import worker в том же процессе берёт модуль из домашней папки автора, а не из копии
+        — на чистой копии это ловил тест пути импорта (он падал, если плагин был импортирован
+        раньше). Проверка — снимок sys.path до и после load_plugin()."""
+        before = list(sys.path)
+        p = load_plugin()
+        leaked = [x for x in sys.path if x not in before]
+        self.assertFalse(leaked, f"плагин оставил в sys.path: {leaked[:1]}")
+        self.assertEqual(p.OPERATING_POINT, 0.70, "рабочая точка не получена — импорт упал")
 
     def _mem(self, with_fts=True):
         import sqlite3

@@ -41,6 +41,13 @@ def _thresh():
 
 LABELS = _labels()
 THRESH = _thresh()
+
+def models_available():
+    """Модель установлена. Тесты логики подменяют её фиксом и обязаны обходить эту
+    проверку: на чистой копии labels.txt/thresholds.npy нет (их создаёт model_setup.py),
+    и тест, который проверяет поведение классификатора, не должен зависеть от того,
+    скачана ли модель на машине тестировщика."""
+    return LABELS is not None and THRESH is not None and os.path.exists(ONNX) and os.path.exists(TOKENIZER)
 with open(os.path.join(os.path.dirname(HERE), "psychology", "taxonomy_map.json"), encoding="utf-8") as _f:
     TAXONOMY = json.load(_f)["labels"]
 MAX_TOKENS = 256
@@ -85,7 +92,7 @@ def classify(text, min_conf=None):
     Чистая установка (модели ещё не скачаны) — честный `unavailable`, а не падение на
     импорте: навык обязан деградировать к лексикону, а не ломаться целиком.
     """
-    if LABELS is None or THRESH is None or not os.path.exists(ONNX) or not os.path.exists(TOKENIZER):
+    if not models_available():
         return {"unavailable": "модель не установлена: нет labels.txt / thresholds.npy / onnx "
                                "— выполни scripts/setup.sh"}
     tok = tokenizer()

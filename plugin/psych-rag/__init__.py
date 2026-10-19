@@ -38,20 +38,26 @@ TIMEOUT = 12
 RECHECK_SECONDS = 86400  # перепроверка версии модели не чаще раза в сутки на чат
 _checked = {}            # (platform, chat_id) -> время проверки
 
-sys.path.insert(0, SKILL_DIR + "/scripts")
+# Импорт выполняется с временным sys.path, который снимается сразу после: прежний
+# постоянный insert(0) засоряет процесс. Замер (тест): после импорта плагина путь
+# scripts навыка остаётся в sys.path, и любой поздний `import worker` в том же
+# процессе берёт модуль из домашней папки автора, а не из копии — тест на чистой
+# копии падал именно из-за этого.
+_P = SKILL_DIR + "/scripts"
+sys.path.insert(0, _P)
 try:
     from util import OPERATING_POINT   # рабочая точка правила — одна для всех путей
+    import markers as _markers         # каноническое определение абзаца — одна для всех слоёв
+    import worker_client as _wc        # тёплый worker: модели загружены один раз
 except Exception:
     OPERATING_POINT = 0.70
-try:
-    import markers as _markers   # каноническое определение абзаца — одна для всех слоёв
-except Exception:
     _markers = None
-
-try:
-    import worker_client as _wc   # тёплый worker: модели загружены один раз
-except Exception:
     _wc = None
+finally:
+    try:
+        sys.path.remove(_P)
+    except ValueError:
+        pass
 
 
 def worker_call(op, **kw):
