@@ -134,42 +134,55 @@ def cmd_login(a):
              "note": "сессия сохранена локально, повторный логин не нужен"})
 
 
+def fetch_comments(client, chat, post, limit):
+    """Сетевой путь становится тестируемым: клиент передаётся извне, тест подменяет
+    его фиксом (mock-transport), и сеть не трогается."""
+    entity = client.get_entity(peer_for(chat))
+    # limit=0 в Telethon означает «ноль сообщений», а не «все»: iter_messages при
+    # limit <= 0 сразу завершается, и путь по умолчанию возвращал пустой список,
+    # хотя help обещал «0 = все». «Все» — это None.
+    lim = None if limit == 0 else limit
+    comments = []
+    for m in client.iter_messages(entity, reply_to=post, limit=lim):
+        reactions = 0
+        if m.reactions:
+            reactions = sum(r.count for r in m.reactions.results or [])
+        author = m.post_author
+        if not author and m.sender is not None:
+            author = (getattr(m.sender, "first_name", None)
+                      or getattr(m.sender, "title", None)
+                      or str(m.sender_id))
+        comments.append({
+            "id": m.id,
+            "reply_to": m.reply_to.reply_to_msg_id if m.reply_to else None,
+            "author": author or str(m.sender_id),
+            "text": m.text or "",
+            "date": m.date.isoformat() if m.date else None,
+            "reactions": reactions,
+        })
+    return comments
+
+
 def cmd_comments(a):
+    chat, post = (parse_link(a.link) if a.link else (a.chat, a.post))
+    if not chat or not post:
+        out({"status": "bad_input", "reason": "нужны --link или --chat + --post"})
+        return
+    # dry-run обязан работать БЕЗ сессии: он проверяет разбор ссылки и печатает план,
+    # а не требует логина (иначе offline-режим был бы недоступен именно там, где он нужен)
+    if getattr(a, "dry_run", False):
+        out({"status": "dry_run", "chat": str(chat), "post": post,
+             "limit": None if a.limit == 0 else a.limit,
+             "would": "get_entity(peer_for(chat)) + iter_messages(reply_to=post)",
+             "note": "клиент не создаётся, сеть не трогается"})
+        return
     if not load_config() or not os.path.exists(SESSION + ".session"):
         out({"status": "login_required",
              "reason": "нет Telethon-сессии — нужен одноразовый логин под учёткой пользователя",
              "why": "Bot API не умеет читать комментарии; читаем тред обсуждения локальной сессией пользователя"})
         return
-    chat, post = (parse_link(a.link) if a.link else (a.chat, a.post))
-    if not chat or not post:
-        out({"status": "bad_input", "reason": "нужны --link или --chat + --post"})
-        return
-    # --chat может быть строкой «-1001543» (соглашение Bot API) — приводим к peer Telethon
     with client() as c:
-        entity = c.get_entity(peer_for(chat))
-        comments, n = [], 0
-        # limit=0 в Telethon означает «ноль сообщений», а не «все»: iter_messages при
-        # limit <= 0 сразу StopAsyncIteration (client/messages.py), и путь по умолчанию
-        # возвращал пустой список, хотя help обещал «0 = все». «Все» — это None.
-        lim = None if a.limit == 0 else a.limit
-        for m in c.iter_messages(entity, reply_to=post, limit=lim):
-            n += 1
-            reactions = 0
-            if m.reactions:
-                reactions = sum(r.count for r in m.reactions.results or [])
-            author = m.post_author
-            if not author and m.sender is not None:
-                author = (getattr(m.sender, "first_name", None)
-                          or getattr(m.sender, "title", None)
-                          or str(m.sender_id))
-            comments.append({
-                "id": m.id,
-                "reply_to": m.reply_to.reply_to_msg_id if m.reply_to else None,
-                "author": author or str(m.sender_id),
-                "text": m.text or "",
-                "date": m.date.isoformat() if m.date else None,
-                "reactions": reactions,
-            })
+        comments = fetch_comments(c, chat, post, a.limit)
     result = {"status": "ok", "chat": str(chat), "post": post,
               "count": len(comments), "comments": comments}
     if a.sentiment and comments:
@@ -211,6 +224,8 @@ def main():
     cm.add_argument("--limit", type=int, default=0, help="0 = все")
     cm.add_argument("--sentiment", action="store_true",
                     help="после сбора — настроение и однородность тредов тем же лексиконом, что и comment_sentiment.py")
+    cm.add_argument("--dry-run", action="store_true",
+                    help="печатает, что сделал бы, не создавая клиент и не трогая сеть")
     a = ap.parse_args()
     {"status": cmd_status, "login": cmd_login, "comments": cmd_comments}[a.cmd](a)
 

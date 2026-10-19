@@ -131,12 +131,15 @@ class TestFixed(unittest.TestCase):
             def iter_messages(self, entity, reply_to=None, limit=None):
                 seen["limit"] = limit
                 return []
+        orig_client, orig_load = tele.client, tele.load_config
         tele.client = lambda: FakeClient()
         tele.load_config = lambda: {"api_id": 1, "api_hash": "x"}
         # патчить атрибут и восстанавливать в finally: tele.os — тот же объект os, что у
         # всего теста, и без восстановления подмена остаётся на следующие тесты
-        # (проверка существования файла всегда даёт True)
-        orig_exists = tele.os.path.exists
+        # (проверка существования файла всегда даёт True). То же с tele.out: без
+        # восстановления следующий тест печатает пустой вывод и падает на парсинге JSON,
+        # а не на своей логике.
+        orig_exists, orig_out = tele.os.path.exists, tele.out
         tele.os.path.exists = lambda p: True
         tele.out = lambda o: None
         try:
@@ -148,6 +151,7 @@ class TestFixed(unittest.TestCase):
             self.assertEqual(seen.get("limit"), 50)
         finally:
             tele.os.path.exists = orig_exists
+            tele.out, tele.client, tele.load_config = orig_out, orig_client, orig_load
 
     def test_lexicon_word_boundary_and_negation(self):
         self.assertEqual(comment_sentiment.classify("ураган")[0], "нейтрально",
@@ -946,6 +950,66 @@ class TestOpenBugs(unittest.TestCase):
                              "dry-run обязан ничего не писать")
         finally:
             (status_post._urlopen, status_post.bot_token, status_post.STATE_DIR) = orig
+
+    def test_telegram_comments_is_testable_without_network(self):
+        """Поведение: сетевой скрипт становится тестируемым только когда у него есть
+        offline/dry-run режим и mock-transport. Здесь dry-run печатает план и НЕ создаёт
+        клиент, и обязан работать БЕЗ сессии: прежний порядок проверял логин ДО dry-run,
+        и offline-режим был недоступен именно там, где нужен. Mock-клиент передаётся
+        извне и даёт каноническую форму комментария."""
+        if tele is None:
+            self.skipTest("telethon не установлен — путь не импортируется")
+        calls = []
+
+        def boom():
+            calls.append("client")
+            raise AssertionError("dry-run обязан не создавать клиент")
+
+        orig_client, orig_load, orig_session = tele.client, tele.load_config, tele.SESSION
+        tele.client, tele.load_config, tele.SESSION = boom, lambda: None, "/nonexistent/session"
+        try:
+            a = types.SimpleNamespace(link="https://t.me/c/1543/100", chat=None, post=None,
+                                      limit=0, sentiment=False, dry_run=True)
+            buf = io.StringIO()
+            with contextlib.redirect_stdout(buf):
+                tele.cmd_comments(a)
+            res = json.loads(buf.getvalue())
+            self.assertEqual(res["status"], "dry_run", "dry-run не работает")
+            self.assertEqual(calls, [], "dry-run создал клиент")
+            self.assertIsNone(res["limit"], "limit=0 обязан означать «все» (None)")
+            self.assertEqual(res["post"], 100, "id поста ушёл в query (?t=123)")
+
+            buf2 = io.StringIO()
+            with contextlib.redirect_stdout(buf2):
+                tele.cmd_comments(types.SimpleNamespace(
+                    link="https://t.me/c/1543/100", chat=None, post=None,
+                    limit=0, sentiment=False, dry_run=False))
+            self.assertEqual(json.loads(buf2.getvalue())["status"], "login_required",
+                             "проверка сессии пропала")
+        finally:
+            tele.client, tele.load_config, tele.SESSION = orig_client, orig_load, orig_session
+
+        class FakeMsg:
+            def __init__(self, i, text, reply=None):
+                self.id, self.text = i, text
+                self.reply_to = types.SimpleNamespace(reply_to_msg_id=reply) if reply else None
+                self.sender = types.SimpleNamespace(first_name="A", sender_id="A")
+                self.post_author, self.date, self.reactions = None, None, None
+
+        seen = []
+
+        class FakeClient:
+            def get_entity(self, peer):
+                seen.append(("entity", peer))
+                return "e"
+            def iter_messages(self, entity, reply_to=None, limit=None):
+                seen.append(("iter", limit))
+                return iter([FakeMsg(1, "злой текст"), FakeMsg(2, "злой текст", reply=1)])
+
+        rows = tele.fetch_comments(FakeClient(), "-1001543", 100, 0)
+        self.assertEqual(seen[1][1], None, "limit=0 обязан означать «все» (None)")
+        self.assertTrue(all(r["id"] for r in rows), "каноническая форма без поля id")
+        self.assertEqual(rows[1]["reply_to"], 1, "reply_to потерялся")
 
 class TagRuleTests(unittest.TestCase):
     """Поведенческие тесты на починки тегов комментария (пункты аудита)."""
