@@ -10,7 +10,9 @@ SemEval-2023 Task 3, мультиязычная, работает на русс�
 Метки переводятся на наши устройства через psychology/taxonomy_map.json.
 
 Использование:
-  python3 classifier.py "текст" [--json] [--min 0.5]
+  python3 classifier.py "текст" [--json] [--min 0.70]
+  --min без значения = рабочая точка правила (util.OPERATING_POINT = 0.70); раньше CLI
+  без флага применял только пороги thresholds.npy и размечал слабее плагина.
 """
 import json, os, sys, time
 import numpy as np
@@ -20,7 +22,7 @@ import onnxruntime as ort
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 import markers  # каноническое определение абзаца для всех слоёв
-from util import load_json, read_lines
+from util import load_json, read_lines, OPERATING_POINT
 MODELS = os.path.join(os.path.dirname(HERE), "psychology", "models")
 ONNX = os.path.join(MODELS, "classifier_int8.onnx")
 TOKENIZER = os.path.join(MODELS, "tokenizer.json")
@@ -116,9 +118,12 @@ def gated_paragraphs(text):
 
 def main():
     if len(sys.argv) < 2:
-        print("usage: classifier.py <text> [--json] [--min 0.5] [--gated]", file=sys.stderr); return 1
+        print("usage: classifier.py <text> [--json] [--min 0.70] [--gated]", file=sys.stderr); return 1
     text = sys.argv[1]
-    min_conf = None
+    # рабочая точка правила применяется по умолчанию: без неё CLI-путь знает только
+    # thresholds.npy (14 из 23 порогов ниже 0.70) и размечает слабее плагина —
+    # один и тот же текст давал разные вердикты в зависимости от пути вызова
+    min_conf = OPERATING_POINT
     if "--min" in sys.argv:
         idx = sys.argv.index("--min") + 1
         if idx >= len(sys.argv):

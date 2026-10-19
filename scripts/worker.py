@@ -21,6 +21,7 @@ import json, os, sys, time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import markers, rag_core as R
+from util import OPERATING_POINT   # рабочая точка — одна для всех путей
 
 NO_MODELS = os.environ.get("PSYCH_WORKER_NO_MODELS") == "1"
 CHUNK = R.CHUNK
@@ -95,7 +96,7 @@ def main():
             emit({"ok": True, "markers": markers.scan(req.get("text") or "")})
         elif op == "classify":
             text = req.get("text") or ""
-            minp = float(req.get("min", 0.70))
+            minp = float(req.get("min", OPERATING_POINT))
             if cls is None:
                 emit({"ok": True, "classification": [], "model": None})
             elif req.get("gated"):

@@ -34,12 +34,15 @@ MAX_CHARS = 4096        # гейт обязан равняться фактич�
                         # сообщения 4001–4096 символов не разбирались вообще, и это
                         # выглядело как пропуск анализа, а не как отказ гейта
 TIMEOUT = 12
-OPERATING_POINT = 0.70  # правило навыка: ⚫ при p ≥ порога метки И p ≥ 0.70;
-                        # без --min применяется только порог thresholds.npy (14 из 23 ниже 0.70)
+# рабочая точка — одна для всех путей (util); раньше каждый модуль держал свою
 RECHECK_SECONDS = 86400  # перепроверка версии модели не чаще раза в сутки на чат
 _checked = {}            # (platform, chat_id) -> время проверки
 
 sys.path.insert(0, SKILL_DIR + "/scripts")
+try:
+    from util import OPERATING_POINT   # рабочая точка правила — одна для всех путей
+except Exception:
+    OPERATING_POINT = 0.70
 try:
     import markers as _markers   # каноническое определение абзаца — одна для всех слоёв
 except Exception:

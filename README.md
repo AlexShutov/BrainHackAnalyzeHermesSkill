@@ -197,7 +197,7 @@ plugin/psych-rag/                pre_gateway_dispatch hook (no core patch)
 
 ### 19 октября — мажорные
 
-- **C1 — операционная точка 0.70 в рантайме**: плагин и `psych_layer` передают `--min 0.70` (14 из 23 порогов ниже 0.70, раньше применялся только `thresholds.npy`). [`9f7a4ab`](https://github.com/AlexShutov/BrainHackAnalyzeHermesSkill/commit/9f7a4ab)
+- **C1 — операционная точка 0.70 в рантайме**: плагин и `psych_layer` передают `--min 0.70` (14 из 23 порогов ниже 0.70, раньше применялся только `thresholds.npy`). [`9f7a4ab`](https://github.com/AlexShutov/BrainHackAnalyzeHermesSkill/commit/9f7a4ab) — точка теперь одна для всех путей (`util.OPERATING_POINT`), и CLI без `--min` применяет её по умолчанию; живой замер: Doubt p=0.526 при пороге 0.47 выдавался прежним CLI и не выдаётся по правилу. Тест `test_cli_default_applies_operating_point`.
 - **C2 — гейт плагина 4000 → 4096** (фактический лимит платформы): сообщения 4001–4096 не разбирались вообще. [`a2977e8`](https://github.com/AlexShutov/BrainHackAnalyzeHermesSkill/commit/a2977e8)
 - **C3 — одно определение треда и одно определение «среднего по тредам»**: Telegram и Rutube больше не строят тред по `reply_to`/`parent_id`, оба идут через `build_threads` (корень + все потомки); взвешенная версия показывается отдельной строкой. [`0054395`](https://github.com/AlexShutov/BrainHackAnalyzeHermesSkill/commit/0054395)
 - **M1–M7** — имя собственное язык не решает; фрагмент ≤3 слов язык не решает; `amb` не входит в долю не-русского; дубликат стема «не надо»; один порядок ничьи (`TIE_ORDER`); `END_MAP` стал достижимым (`SIDE_CLASS` был `{3,}`); у `side_share` появился порог. [`4f131f8`](https://github.com/AlexShutov/BrainHackAnalyzeHermesSkill/commit/4f131f8)
@@ -238,13 +238,12 @@ plugin/psych-rag/                pre_gateway_dispatch hook (no core patch)
 /Users/alex/.hermes/tools/psych-rag-env/bin/python scripts/tests/test_layers.py
 ```
 
-55 tests, stdlib only, ONNX/HF не грузятся (модели подменяются фиксами). Текущий прогон: 55/55.
+56 tests, stdlib only, ONNX/HF не грузятся (модели подменяются фиксами). Текущий прогон: 56/56.
 
 ## Known issues (не починено)
 
 Зафиксировано сплошным проходом по коду 19 октября; тестами не покрыто:
 
-- CLI `classifier.py` без `--min` применяет только `thresholds.npy` (14 из 23 порогов ниже 0.70) — операционная точка не применяется.
 - `status_post.py`: guard `"message is not modified"` недостижим, потому что `api()` выходит на любом не-429 `HTTPError` — heartbeat с той же строкой статуса роняет скрипт, пост зависает на последом успешном обновлении.
 - `NEURAL_BUCKET` — 27 из 28: метка `curiosity` без корзины, fallback на лексикон.
 - `MARKETING` слишком широкий: «для вас», «осталось », «90%», «по ссылке» — бытовые фразы дают 💸.

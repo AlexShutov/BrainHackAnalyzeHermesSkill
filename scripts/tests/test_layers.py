@@ -26,7 +26,7 @@ sys.path.insert(0, YT)
 import markers, side
 import types
 import ukr_detect as ukr, comment_sentiment, comment_analysis as CA, status_post, neural_pass
-import classifier, rag_core as R, tag_routing as TR
+import classifier, rag_core as R, tag_routing as TR, util
 
 def read(path):
     with open(path, encoding="utf-8") as f:
@@ -384,6 +384,39 @@ class TestOpenBugs(unittest.TestCase):
                                           {"classification": [{"para": 1, "labels": []}]})[1]
         p.classifier_hits("абзац", [{"marker": "m"}])
         self.assertEqual(calls[0][1].get("min"), 0.70, "плагин зовёт worker без рабочей точки")
+
+    def test_cli_default_applies_operating_point(self):
+        """Правило: ⚫ при p ≥ порога метки И p ≥ 0.70. CLI без --min обязан применять
+        рабочую точку, а не только thresholds.npy — кейс, где «как есть» и «по правилу»
+        дают разный результат (Doubt p=0.60, её порог 0.47)."""
+        class FixedSession:
+            def __init__(self, probs): self.probs = probs
+            def run(self, _, feeds):
+                logits = np.full(len(classifier.LABELS), -3.0)
+                for name, p in self.probs.items():
+                    logits[classifier.LABELS.index(name)] = np.log(p / (1 - p))
+                return [np.array([logits])]
+        classifier.session = lambda: FixedSession({"Doubt": 0.60, "Appeal_to_Time": 0.80})
+        classifier.tokenizer = lambda: FakeTok()
+        labels = {l["label"] for r in run_classifier("абзац")["classification"] for l in r["labels"]}
+        self.assertNotIn("Doubt", labels,
+                        "CLI без --min применяет только порог 0.47 — рабочая точка не применяется")
+        self.assertIn("Appeal_to_Time", labels)
+        # рабочая точка — default, а не жёсткий пол: явный --min вниз обязан её снять
+        labels2 = {l["label"] for r in run_classifier("абзац", ["--min", "0.5"])["classification"]
+                   for l in r["labels"]}
+        self.assertIn("Doubt", labels2, "--min 0.5 обязан вернуть p=0.60")
+        # одна точка во всех путях: CLI, worker, плагин, psych_layer
+        import psych_layer as PL
+        p = load_plugin()
+        self.assertEqual(p.OPERATING_POINT, classifier.OPERATING_POINT,
+                        "рабочая точка разошлась между плагином и CLI")
+        self.assertEqual(PL.OPERATING_POINT, classifier.OPERATING_POINT,
+                        "рабочая точка разошлась между psych_layer и CLI")
+        self.assertEqual(classifier.OPERATING_POINT, util.OPERATING_POINT,
+                        "CLI не читает рабочую точку из общего модуля")
+        self.assertEqual(p.OPERATING_POINT, util.OPERATING_POINT,
+                        "плагин не читает рабочую точку из общего модуля")
 
     def test_thread_definition_is_one_across_paths(self):
         if tele is None:

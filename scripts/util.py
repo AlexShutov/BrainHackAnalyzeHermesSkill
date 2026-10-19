@@ -23,6 +23,12 @@ def read_bytes(path):
     with open(path, "rb") as f:
         return f.read()
 
+# Рабочая точка правила: ⚫ ставится при p ≥ порога метки И p ≥ 0.70. Одна для всех
+# путей (CLI, worker, плагин, psych_layer) — раньше каждый держал свою, и CLI без --min
+# применял только thresholds.npy (14 из 23 порогов ниже 0.70), то есть размечал слабее,
+# чем плагин: тот же текст давал разные вердикты в зависимости от пути.
+OPERATING_POINT = 0.70
+
 def write_json(path, obj, encoding="utf-8", indent=1):
     with open(path, "w", encoding=encoding) as f:
         json.dump(obj, f, ensure_ascii=False, indent=indent)

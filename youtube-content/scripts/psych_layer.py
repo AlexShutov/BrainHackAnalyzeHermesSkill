@@ -16,14 +16,13 @@ Usage:
 """
 import argparse, json, os, re, subprocess, sys
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "scripts"))
-from util import read_text
+from util import read_text, OPERATING_POINT   # рабочая точка — одна для всех путей
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 SKILL_ROOT = os.path.abspath(os.path.join(HERE, "..", ".."))
 HERMES = os.environ.get("HERMES_HOME") or os.path.expanduser("~/.hermes")
 PY = os.environ.get("PSYCH_RAG_PY", os.path.join(HERMES, "tools", "psych-rag-env", "bin", "python"))
 SCRIPTS = os.path.join(SKILL_ROOT, "scripts")
-OPERATING_POINT = 0.70   # то же, что в плагине: ⚫ при p ≥ порога метки И p ≥ 0.70
 
 
 def paragraphs(text):
