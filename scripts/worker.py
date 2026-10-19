@@ -91,11 +91,12 @@ def guard_memory(resp, state):
     """Память добавляется к ТОМУ ЖЕ ответу, а не отдельным сообщением. Отдельный emit
     сдвигает ответы клиента: следующий запрос читает строку предыдущего (замер живым
     прогоном — после guard ответ на `markers` пришёл как `neural released`). Возвращает
-    True, если освобождение произошло."""
-    if not state or not should_release(current_rss_kb(), RSS_LIMIT_KB):
+    True, если освобождение произошло. Guard молчит, когда освобождать нечего: dict со
+    всеми None — это «нечего», иначе он сообщает освобождение, которого не было."""
+    if not any(state.values()) or not should_release(current_rss_kb(), RSS_LIMIT_KB):
         return False
     rss = current_rss_kb()
-    freed = release_neural(state)
+    freed = release_models(state)
     resp["memory"] = {"rss_kb": rss, "released_kb": freed, "limit_kb": RSS_LIMIT_KB,
                       "neural_released": True}
     return True
@@ -123,13 +124,17 @@ def should_release(rss_kb, limit_kb):
     return rss_kb > limit_kb
 
 
-def release_neural(state):
-    """Освободить модели и вернуть количество освобождённых КБ (оценка по RSS
-    до и после gc). Возвращает 0, если освобождать нечего."""
-    if not state:
+def release_models(state):
+    """Освободить загруженные слои и вернуть оценку освобождённых КБ (RSS до и после gc).
+    Освобождается ВСЁ, что держит процесс: fastembed (~1.8 ГБ с ONNX-классификатором) и
+    HF-модели нейро-прохода. Прежний guard освобождал только HF-модели — то есть на
+    16 ГБ машине после «освобождения» в памяти оставалось 1.8 ГБ, и читатель видел
+    освобождение, которого не было."""
+    if not any(state.values()):
         return 0
     before = current_rss_kb()
-    state.clear()
+    for k in list(state):
+        state[k] = None
     gc.collect()
     return max(0, before - current_rss_kb())
 
@@ -191,22 +196,30 @@ def load_neural():
 def main():
     t0 = time.time()
     con = R.open_db()
-    emb = load_embedding()
-    cls = load_classifier()
-    matrix = None
-    neural = None
-    neural_released = False
+    # Слои в одном dict, а не в отдельных переменных: освобождать обязан весь процесс,
+    # а не только HF-модели — fastembed с ONNX-классификатором сами держат ~1.8 ГБ
+    state = {"embedding": load_embedding(), "classifier": load_classifier(),
+            "neural": None, "matrix": None}
+    guard_released = False
+
+    def get(name, loader):
+        """Ленивая загрузка слоя. После guard-освобождения перезагрузка запрещена:
+        это вернуло бы те же гигабайты, ради которых их отдали."""
+        if guard_released:
+            return None
+        if state[name] is None:
+            state[name] = loader()
+        return state[name]
 
     def cached_matrix():
-        nonlocal matrix
-        if matrix is None and emb is not None:
+        if state["matrix"] is None and state["embedding"] is not None:
             import numpy as np
             rows = list(con.execute("SELECT id, blob FROM vec"))
             if rows:
                 ids = [r[0] for r in rows]
                 e = np.frombuffer(b"".join(r[1] for r in rows), dtype=np.float32).reshape(len(rows), -1)
-                matrix = (ids, e / (np.linalg.norm(e, axis=1, keepdims=True) + 1e-9))
-        return matrix
+                state["matrix"] = (ids, e / (np.linalg.norm(e, axis=1, keepdims=True) + 1e-9))
+        return state["matrix"]
 
     def emit(obj):
         sys.stdout.write(json.dumps(obj, ensure_ascii=False) + "\n")
@@ -215,13 +228,13 @@ def main():
     def dispatch(req):
         """Один ответ на один запрос. Ops обязаны ВОЗВРАЩАТЬ dict, а не emit: иначе
         memory guard пишет вторую строку и клиент читает ответ не своего запроса."""
-        nonlocal neural, neural_released
         op = req.get("op")
         if op == "ping":
             return {"ok": True}
         if op == "search":
             q = req.get("query") or ""
             chunks = req.get("chunks") or [q]
+            emb = get("embedding", load_embedding)
             qvecs = [list(emb.embed([c]))[0] for c in chunks] if emb else [None] * len(chunks)
             return {"ok": True, "results": R.merge_chunked(chunks, con=con, qvecs=qvecs,
                                                            matrix=cached_matrix())}
@@ -230,6 +243,7 @@ def main():
         if op == "classify":
             text = req.get("text") or ""
             minp = float(req.get("min", OPERATING_POINT))
+            cls = get("classifier", load_classifier)
             if cls is None:
                 return {"ok": True, "classification": [], "model": None}
             if req.get("gated"):
@@ -243,12 +257,10 @@ def main():
         if op == "neural":
             if NO_MODELS:
                 return {"ok": False, "error": "no models"}
-            state = neural_gate(neural, neural_released)
-            if state == "released":
-                return {"ok": False, "error": "neural released by memory guard",
+            if neural_gate(state["neural"], guard_released) == "released":
+                return {"ok": False, "error": "models released by memory guard",
                         "released": True}
-            if state == "load":
-                neural = load_neural()
+            neural = get("neural", load_neural)
             if not neural:
                 return {"ok": False, "error": "neural unavailable"}
             import neural_pass as NP
@@ -266,15 +278,17 @@ def main():
         return {"ok": False, "error": f"unknown op: {op}"}
 
     emit({"ok": True, "warm_ms": round((time.time() - t0) * 1000),
-          "embedding": emb is not None, "classifier": cls is not None,
+          "embedding": state["embedding"] is not None,
+          "classifier": state["classifier"] is not None,
           "docs": con.execute("SELECT COUNT(*) FROM docs").fetchone()[0],
-          "idle_s": IDLE_TIMEOUT, "rss_limit_kb": RSS_LIMIT_KB})
+          "idle_s": IDLE_TIMEOUT, "model_idle_s": NEURAL_IDLE_RELEASE,
+          "rss_limit_kb": RSS_LIMIT_KB})
 
     ppid0 = os.getppid()
     stdin_fd = sys.stdin.fileno()
     buf = b""
     last_request = time.time()
-    last_neural = last_request
+    last_model = last_request
     pending = None
     while True:
         if b"\n" in buf:
@@ -284,19 +298,19 @@ def main():
             if not r:
                 now = time.time()
                 if os.environ.get("PSYCH_WORKER_DEBUG"):
-                    sys.stderr.write(f"[idle] now-last_request={now-last_request:.1f} "
-                                     f"idle={IDLE_TIMEOUT} neural_idle={NEURAL_IDLE_RELEASE} "
-                                     f"neural={'yes' if neural else 'no'}\n")
+                    sys.stderr.write(f"[idle] now-last_model={now-last_model:.1f} "
+                                     f"idle={IDLE_TIMEOUT} model_idle={NEURAL_IDLE_RELEASE} "
+                                     f"loaded={sum(1 for v in state.values() if v)}\n")
                 if now - last_request >= IDLE_TIMEOUT:
                     emit({"ok": False, "error": "idle timeout", "idle_s": IDLE_TIMEOUT})
                     break
-                if neural and idle_release_due(last_neural, now):
-                    # память на паузе: долгий хозяин (гейтвей) живёт часами, и 3.4 ГБ
+                if idle_release_due(last_model, now):
+                    # память на паузе: долгий хозяин (гейтвей) живёт часами, и гигабайты
                     # модельного RSS в нём — это не «тёплый кэш», а занятая память.
-                    # Освобождаем модели, процесс остаётся (лексикон + классификатор),
-                    # и следующий запрос вправе загрузить заново — это не guard
-                    freed = release_neural(neural)
-                    pending = {"released_kb": freed, "idle_release": True}
+                    # Освобождаем ВСЕ слои, процесс остаётся, и следующий запрос вправе
+                    # загрузить заново — это не guard
+                    freed = release_models(state)
+                    pending = {"released_kb": freed, "idle_release": True} if freed else None
                 continue
             chunk = os.read(stdin_fd, 65536)
             if not chunk:
@@ -317,13 +331,13 @@ def main():
             emit({"ok": False, "error": "bad json"})
             continue
         last_request = time.time()
-        if req.get("op") == "neural":
-            last_neural = last_request
+        if req.get("op") in ("search", "classify", "neural"):
+            last_model = last_request
         resp = dispatch(req)
         if attach_pending(resp, pending):
             pending = None
-        if guard_memory(resp, neural):
-            neural_released = True
+        if guard_memory(resp, state):
+            guard_released = True
         emit(resp)
     con.close()
 

@@ -1752,17 +1752,22 @@ class WorkerLifecycleTests(SnapshotMixin, unittest.TestCase):
         finally:
             w.current_rss_kb = real
 
-    def test_memory_guard_releases_models_and_reports(self):
+    def test_memory_guard_releases_all_layers_and_reports(self):
         w = importlib.import_module("worker")
-        state = {"emotion": object(), "toxicity": object()}
+        state = {"embedding": object(), "classifier": object(),
+                 "neural": {"emotion": object()}, "matrix": None}
         real = w.current_rss_kb
         seq = [w.RSS_LIMIT_KB + 1000, w.RSS_LIMIT_KB - 500]   # RSS до / после освобождения
         try:
             w.current_rss_kb = lambda: seq.pop(0)
-            freed = w.release_neural(state)
-            self.assertEqual(state, {})
+            freed = w.release_models(state)
+            # Освобождается ВСЁ, а не только HF-модели: fastembed с ONNX сами держат
+            # ~1.8 ГБ, и прежний guard отдавал только neural, оставляя эти гигабайты —
+            # читатель видел «освобождение», которого не было
+            self.assertEqual(state, {"embedding": None, "classifier": None,
+                                     "neural": None, "matrix": None})
             self.assertEqual(freed, 1500)
-            self.assertEqual(w.release_neural({}), 0)   # нечего освобождать — не делит на ноль
+            self.assertEqual(w.release_models(state), 0)   # нечего освобождать — не делит на ноль
         finally:
             w.current_rss_kb = real
 
@@ -1803,7 +1808,7 @@ class WorkerLifecycleTests(SnapshotMixin, unittest.TestCase):
             state = {"emotion": object()}
             self.assertTrue(w.guard_memory(resp, state))
             self.assertIn("memory", resp)
-            self.assertEqual(state, {})
+            self.assertTrue(all(v is None for v in state.values()))
             resp2 = {"ok": True, "markers": []}
             self.assertFalse(w.guard_memory(resp2, state))   # нечего освобождать — guard молчит
             self.assertNotIn("memory", resp2)
