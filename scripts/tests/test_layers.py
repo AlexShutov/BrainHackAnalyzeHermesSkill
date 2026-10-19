@@ -24,7 +24,8 @@ sys.path.insert(0, SCRIPTS)
 sys.path.insert(0, YT)
 
 import markers, side
-import ukr_detect as ukr, comment_sentiment, status_post, neural_pass
+import types
+import ukr_detect as ukr, comment_sentiment, comment_analysis as CA, status_post, neural_pass
 import classifier, rag_core as R
 
 def read(path):
@@ -165,20 +166,77 @@ class TestFixed(unittest.TestCase):
                              f"стем «{stem}» совпадает с русским — в словаре его быть не должно")
 
     def test_rag_query_is_chunked_by_callers(self):
+        """Поведение: все три пути реально делят длинный запрос на куски — проверяется
+        фактическим вызовом (spy), а не словом "chunk" в исходнике."""
+        long_text = "подмена " + "слово " * 400            # > 1500 -> несколько кусков
+        hit = {"results": [{"kind": "device", "label": "X", "score": 0.5, "snippet": "y"}]}
         p = load_plugin()
-        src = read(PLUGIN)
-        self.assertIn("--chunk", src, "плагин обязан опрашивать индекс кусками")
-        ysrc = read(os.path.join(YT, "psych_layer.py"))
-        self.assertIn("--chunk", ysrc, "psych_layer обязан опрашивать индекс кусками")
-        self.assertNotIn("text[:1500]", ysrc, "psych_layer не должен резать запрос")
+        calls = []
+        p.worker_call = lambda op, **kw: (calls.append((op, kw)), hit)[1]
+        p.retrieve(long_text)
+        search = [kw for op, kw in calls if op == "search"]
+        self.assertTrue(search, "retrieve обязан идти через worker_call")
+        self.assertGreater(len(search[0]["chunks"]), 1, "плагин обязан делить длинный запрос")
+
+        import psych_layer as PL
+        calls.clear()
+        PL.worker_call = lambda op, **kw: (calls.append((op, kw)),
+                                           {"markers": [], "classification": [], "results": [hit["results"][0]]})[1]
+        f = os.path.join(tempfile.mkdtemp(), "t.txt")
+        with open(f, "w", encoding="utf-8") as fh:
+            fh.write(long_text)
+        argv, sys.argv = sys.argv, ["psych_layer.py", "--file", f]
+        buf = io.StringIO()
+        try:
+            with contextlib.redirect_stdout(buf):
+                PL.main()
+        finally:
+            sys.argv = argv
+        search = [kw for op, kw in calls if op == "search"]
+        self.assertTrue(search, "psych_layer обязан опрашивать индекс через worker_call")
+        self.assertGreater(len(search[0]["chunks"]), 1,
+                           "psych_layer обязан опрашивать индекс кусками, а не срезом первых 1500")
+
+        try:
+            import rag_mcp
+        except Exception:
+            self.skipTest("MCP-модуль не импортируется (нет fastembed)")
+        seen = {}
+        def chunks_of(q):
+            seen["chunks"] = [q[:1500], q[1500:]]
+            return seen["chunks"]
+        def merge_chunked(chunks, top_k=6, qvecs=None):
+            seen["used"] = len(chunks)
+            return []
+        rag_mcp.R = types.SimpleNamespace(TOP_K=6, chunks_of=chunks_of, merge_chunked=merge_chunked)
+        rag_mcp.get_model = lambda: False
+        res = rag_mcp.handle({"method": "tools/call", "params": {"name": rag_mcp.TOOL["name"],
+                                                                 "arguments": {"query": long_text}}})
+        self.assertIn("chunks", seen, "MCP-путь обязан вызывать chunk на длинном запросе")
+        self.assertGreater(seen.get("used", 0), 1, "MCP обязан искать по всем кускам")
+        self.assertIn("ничего не найдено", res["content"][0]["text"])
 
 # --- B. правила, которые кодом не реализованы (падают) -----------------------
 class TestOpenBugs(unittest.TestCase):
     def test_plugin_gate_equals_platform_limit(self):
-        """Правило: гейт обязан равняться фактическому лимиту платформы (4096)."""
+        """Поведение: сообщение 4061 символа с 2 абзацами проходит гейт, 4121 — отклоняется;
+        итог никогда не превышает лимит платформы."""
         p = load_plugin()
-        src = read(PLUGIN)
-        self.assertIn("4096", src, "в коде гейта 4000 — сообщения 4001–4096 не разбираются")
+        p.worker_call = lambda op, **kw: None
+        p.retrieve = lambda t: None
+        p.marker_hits = lambda t: [{"family": "f", "marker": "m", "found": "x", "context": "y"}]
+        p.classifier_hits = lambda t, h: None
+        p.version_check = lambda s: None
+        class Ev:
+            def __init__(self, text):
+                self.text, self.internal, self.source = text, False, None
+        base = "подмена " * 500                                  # 4000 символов
+        out = p.callback(event=Ev(base + "\n\n" + "х" * 59))    # 4061
+        self.assertIsNotNone(out, "сообщение <= 4096 обязано проходить гейт")
+        self.assertLessEqual(len(out["text"]), p.MAX_CHARS, "итог не должен превышать лимит платформы")
+        self.assertEqual(p.MAX_CHARS, 4096, "гейт обязан равняться фактическому лимиту платформы")
+        self.assertIsNone(p.callback(event=Ev(base + "\n\n" + "х" * 119)),   # 4121
+                          "сообщение > 4096 обязано отклоняться")
 
     def test_proper_name_alone_is_not_pig(self):
         """Правило: имя в украинской орфографии — не мова-вставка, 🐷 не ставится."""
@@ -224,9 +282,39 @@ class TestOpenBugs(unittest.TestCase):
                          "ниже порога — это вставка, а не язык текста")
 
     def test_status_post_guard_length_and_flood(self):
-        src = read(os.path.join(YT, "status_post.py"))
-        self.assertIn("4096", src, "нет контроля 4096 символов")
-        self.assertIn("HTTPError", src, "нет обработки 429/сетевой ошибки")
+        """Поведение: длинный статус усекается до лимита, превью сохраняется целиком;
+        429 повторяется, а не роняет скрипт."""
+        preview = "https://youtu.be/abc " + "заголовок " * 100
+        status = "статус " * 2000
+        t = status_post.clamp(preview, status)
+        self.assertLessEqual(len(t), status_post.TG_LIMIT)
+        self.assertTrue(t.startswith(preview.strip()), "превью обязано сохраниться целиком")
+        self.assertIn("Статус:", t)
+
+        import urllib.error
+        attempts = {"n": 0}
+        class Resp:
+            def __enter__(self): return self
+            def __exit__(self, *a): return False
+            def read(self): return b'{"ok": true}'
+        err = urllib.error.HTTPError("u", 429, "Too Many Requests", {},
+                                     io.BytesIO(b'{"ok":false,"parameters":{"retry_after":1}}'))
+        def fake_urlopen(req, timeout=15):
+            attempts["n"] += 1
+            if attempts["n"] == 1:
+                raise err
+            return Resp()
+        orig = (status_post.urllib.request.urlopen, status_post.bot_token, status_post.time.sleep)
+        status_post.urllib.request.urlopen = fake_urlopen
+        status_post.bot_token = lambda: "T"
+        status_post.time.sleep = lambda s: None
+        try:
+            r = status_post.api("sendMessage")
+            self.assertTrue(r.get("ok"), "429 обязана быть повторена, а не убить скрипт")
+            self.assertEqual(attempts["n"], 2, "первая попытка — 429, вторая — успех")
+        finally:
+            err.close()
+            (status_post.urllib.request.urlopen, status_post.bot_token, status_post.time.sleep) = orig
 
     def test_tie_order_is_one_for_both_paths(self):
         """Один лексикон — один порядок ничьи. Проверка поведения, а не строки в файле:
@@ -250,20 +338,52 @@ class TestOpenBugs(unittest.TestCase):
                          "telegram-путь не идёт через общий модуль анализа")
 
     def test_neural_labels_have_no_none_and_known_models(self):
-        src = read(os.path.join(YT, "neural_pass.py"))
-        self.assertIn("REPOS[name]", src)
-        self.assertTrue(set(neural_pass.MULTILABEL) >= set(neural_pass.REPOS))
-        self.assertIn("None not in labels", src, "нет защиты от None-метки в neural_pass")
+        """Поведение: пропуск в id2label не даёт None-метку (модель подменяется фиксом)."""
+        class FakeCfg:
+            id2label = {0: "anger", 1: None, 2: "joy"}
+        class FakeModel:
+            def load_state_dict(self, sd): pass
+            def eval(self): return self
+        neural_pass.hf_hub_download = lambda repo, f: "/tmp/x"
+        neural_pass.AutoConfig = type("A", (), {"from_pretrained": staticmethod(lambda r: FakeCfg())})
+        neural_pass.AutoModelForSequenceClassification = type("B", (),
+                                                              {"from_config": staticmethod(lambda c: FakeModel())})
+        neural_pass.load_bytes = lambda b: {}
+        neural_pass.read_bytes = lambda p: b""
+        buf = io.StringIO()
+        with contextlib.redirect_stderr(buf):
+            model, labels = neural_pass.load_no_mmap("seara/fake")
+        self.assertNotIn(None, labels, "None-метка теряла вердикт по этой модели")
+        self.assertEqual(labels, ["anger", "class_1", "joy"],
+                         "пропуск обязан становиться явным class_N, а не молча терять вердикт")
+        self.assertTrue(set(neural_pass.MULTILABEL) >= set(neural_pass.REPOS),
+                        "fallback-порядок есть не для всех моделей индекса")
 
     # --- новое, найденное этим проходом ---
     def test_runtime_classifier_operating_point(self):
-        """Правило: ⚫ при p ≥ порога метки И p ≥ 0.70 — то есть max(порог, 0.70)."""
-        plugin = read(PLUGIN)
-        ysrc = read(os.path.join(YT, "psych_layer.py"))
-        self.assertIn("--min", plugin, "плагин зовёт classifier без --min 0.70")
-        self.assertIn("--min", ysrc, "psych_layer зовёт classifier без --min 0.70")
-        self.assertIn("np.maximum(THRESH, min_conf)", read(os.path.join(SCRIPTS, "classifier.py")),
-                      "операционная точка берётся как max(порог, min_conf)")
+        """Поведение: порог = max(thresholds.npy, min_conf). Фикс ONNX даёт Doubt с p=0.60
+        (её порог 0.47 ниже 0.70) и Appeal_to_Time с p=0.80 (порог 0.66)."""
+        class FixedSession:
+            def __init__(self, probs): self.probs = probs
+            def run(self, _, feeds):
+                logits = np.full(len(classifier.LABELS), -3.0)
+                for name, p in self.probs.items():
+                    logits[classifier.LABELS.index(name)] = np.log(p / (1 - p))
+                return [np.array([logits])]
+        classifier.session = lambda: FixedSession({"Doubt": 0.60, "Appeal_to_Time": 0.80})
+        classifier.tokenizer = lambda: FakeTok()
+        plain = {r["label"] for r in classifier.classify("абзац")}
+        self.assertIn("Doubt", plain, "без min_conf порога 0.47 достаточно p=0.60")
+        strict = {r["label"] for r in classifier.classify("абзац", min_conf=0.70)}
+        self.assertNotIn("Doubt", strict, "min_conf=0.70 обязан отсеять p=0.60")
+        self.assertIn("Appeal_to_Time", strict, "p=0.80 обязана остаться")
+        # плагин обязан передавать рабочую точку — проверяется фактическим аргументом вызова
+        p = load_plugin()
+        calls = []
+        p.worker_call = lambda op, **kw: (calls.append((op, kw)),
+                                          {"classification": [{"para": 1, "labels": []}]})[1]
+        p.classifier_hits("абзац", [{"marker": "m"}])
+        self.assertEqual(calls[0][1].get("min"), 0.70, "плагин зовёт worker без рабочей точки")
 
     def test_thread_definition_is_one_across_paths(self):
         if tele is None:
@@ -283,10 +403,20 @@ class TestOpenBugs(unittest.TestCase):
                          "— вложенный ответ открывает отдельный тред")
 
     def test_overall_homogeneity_is_one_definition(self):
-        src = read(os.path.join(YT, "rutube_comments.py"))
-        self.assertNotIn("hom_sum / hom_n", src,
-                         "rutube выдаёт как «в среднем по тредам» взвешенное среднее, "
-                         "а навык определяет это как простое среднее по тредам")
+        """Поведение: «в среднем по тредам» — простое среднее по измеримым тредам, не
+        взвешенное. Тред A: 3 содержательных (100%), тред B: 2 (50%) -> простое 75,
+        взвешенное по размеру 80. Все пути идут через comment_analysis."""
+        rows = [{"id": "R1", "author": "a", "text": "злой и злой", "parent": "root", "likes": 0},
+                {"id": "R1.b1", "author": "b", "text": "злой и злой", "parent": "R1", "likes": 0},
+                {"id": "R1.b2", "author": "c", "text": "злой и злой", "parent": "R1", "likes": 0},
+                {"id": "R2", "author": "d", "text": "радостно и радостно", "parent": "root", "likes": 0},
+                {"id": "R2.b1", "author": "e", "text": "злой и злой", "parent": "R2", "likes": 0}]
+        rep = CA.analyze(rows, use_neural=False)
+        self.assertEqual(rep["overall"], 75, "среднее по тредам обязано быть простым")
+        self.assertEqual(rep["weighted"], 80, "взвешенное обязано считаться отдельно")
+        for name in ("rutube_comments.py", "telegram_comments.py", "comment_sentiment.py"):
+            self.assertIn("comment_analysis", read(os.path.join(YT, name)),
+                          f"{name} строит свой тред/среднее вместо общего модуля")
 
     def test_lexicon_has_no_duplicate_stems(self):
         from collections import Counter
@@ -307,11 +437,6 @@ class TestOpenBugs(unittest.TestCase):
 
     def test_ambig_and_weak_are_used_in_the_decision(self):
         """docstring: неоднозначные считаются вместе с маркером; омонимы усиливают решённый язык."""
-        body = re.search(r"def lang_of.*?(?=\ndef )", read(os.path.join(YT, "ukr_detect.py")), re.S).group()
-        self.assertIn("AMBIG", body, "AMBIG определён, но в решении не участвует: «це ми бачили де так» → ru")
-        parts = body.split("return")[1:]
-        self.assertTrue(any("weak_be" in p for p in parts),
-                        "WEAK собирается, но никогда не влияет на вердикт")
         # поведение: неоднозначные без маркера — не русский; одна омонимичная форма язык не решает
         self.assertEqual(ukr.lang_of("це ми бачили де так"), "amb",
                          "неоднозначные слова без маркера уходили в ru")
@@ -319,18 +444,49 @@ class TestOpenBugs(unittest.TestCase):
                          "одна омонимичная форма не должна решать язык")
 
     def test_hf_language_filter_accepts_prefixed_tags(self):
-        src = read(os.path.join(SCRIPTS, "model_update_check.py"))
-        self.assertIn("language:", src, "фильтр языка ловит только 2-буквенные теги, `language:ru` пропускает")
+        """Поведение: кандидат с тегом `language:ru` проходит фильтр, с `language:en` — нет."""
+        import model_update_check as M
+        def fake_hub(url):
+            if "api/models/cur" in url:
+                return {"model_id": "cur", "sha": "r1",
+                        "model-index": [{"results": [{"metrics": [{"type": "f1", "value": 0.45, "name": "macro"}]}]}]}
+            return [{"id": "newru", "sha": "s2", "tags": ["language:ru"],
+                     "model-index": [{"results": [{"metrics": [{"type": "f1", "value": 0.60, "name": "macro"}]}]}]},
+                    {"id": "newen", "sha": "s3", "tags": ["language:en"],
+                     "model-index": [{"results": [{"metrics": [{"type": "f1", "value": 0.70, "name": "macro"}]}]}]}]
+        M.load_version = lambda: {"model_id": "cur", "revision": "r1"}
+        M.load_state = lambda: None
+        M.hub_get = fake_hub
+        argv, sys.argv = sys.argv, ["model_update_check.py", "--dry-run", "--json"]
+        buf = io.StringIO()
+        try:
+            with contextlib.redirect_stdout(buf):
+                M.main()
+        finally:
+            sys.argv = argv
+        out = json.loads(buf.getvalue())
+        self.assertEqual(out["state"]["candidate"]["model_id"], "newru",
+                         "фильтр обязан ловить `language:ru`, а не только 2-буквенный тег")
 
     def test_fetch_transcript_outputs_promised_language_key(self):
-        src = read(os.path.join(YT, "fetch_transcript.py"))
-        self.assertIn('"language"', src.split("def main")[1],
-                      "docstring обещает поле language в выводе, main его не печатает")
+        """Поведение: main печатает обещанные docstring-ем поля language и generated."""
+        import fetch_transcript as FT
+        segs = [{"text": "привет", "start": 0.0, "duration": 1.0}]
+        FT.fetch_transcript = lambda vid, langs=None: (segs, "ru", True)
+        argv, sys.argv = sys.argv, ["fetch_transcript.py", "dQw4w9WgXcQ"]
+        buf = io.StringIO()
+        try:
+            with contextlib.redirect_stdout(buf):
+                FT.main()
+        finally:
+            sys.argv = argv
+        out = json.loads(buf.getvalue())
+        self.assertEqual(out.get("language"), "ru", "docstring обещает поле language в выводе")
+        self.assertTrue(out.get("generated"), "авто-трек обязан быть отмечен")
 
     def test_rag_mcp_chunks_long_query(self):
-        src = read(os.path.join(SCRIPTS, "rag_mcp.py"))
-        self.assertIn("chunk", src, "MCP-путь (основной по правилу навыка) не делит длинный запрос: "
-                                    "embedding видит только первые ~512 токена")
+        """Строковая проверка заменена: chunk-путь MCP проверяется поведением в
+        test_rag_query_is_chunked_by_callers (spy фактического вызова)."""
 
     # --- новое, найденное этим проходом (тесты добавлены вместе с фиксом) ------
     def test_classifier_chunks_overlap(self):
@@ -364,18 +520,39 @@ class TestOpenBugs(unittest.TestCase):
                             "контроль: без маркера переписывание работает")
 
     def test_readonly_db_and_closed_files(self):
-        """Запросная часть читает БД в режиме ro (гейтвей держит write-лок) и не оставляет
-        открытых дескрипторов."""
-        src = read(os.path.join(SCRIPTS, "rag_core.py"))
-        self.assertIn("mode=ro", src, "запросная часть открывает БД на запись")
+        """Поведение: запросное соединение отказывает при попытке записи (режим ro)."""
+        import sqlite3
+        db = os.path.join(tempfile.mkdtemp(), "index.db")
+        con = sqlite3.connect(db)
+        con.execute("CREATE TABLE docs(id INTEGER PRIMARY KEY, kind TEXT, label TEXT, text TEXT)")
+        con.commit(); con.close()
+        orig = R.DB_PATH
+        R.DB_PATH = db
+        try:
+            ro = R.open_db(readonly=True)
+            try:
+                self.assertRaises(sqlite3.OperationalError, ro.execute,
+                                  "INSERT INTO docs VALUES (1,'a','b','c')",
+                                  )
+            finally:
+                ro.close()
+        finally:
+            R.DB_PATH = orig
         for f in sorted(os.listdir(SCRIPTS)):
             if f.endswith(".py") and f != "util.py":   # util.py — сам помощник, в его docstring шаблон упомянут намеренно
                 s = read(os.path.join(SCRIPTS, f))
                 self.assertNotIn("json.load(open(", s, f"{f}: незакрытый open()")
 
     def test_status_post_argv_guard(self):
-        src = read(os.path.join(YT, "status_post.py"))
-        self.assertIn("len(sys.argv)", src, "нет проверки аргументов — IndexError вместо usage")
+        """Поведение: неполная команда даёт usage, а не IndexError."""
+        argv, sys.argv = sys.argv, ["status_post.py", "start", "1"]
+        try:
+            with contextlib.redirect_stderr(io.StringIO()):
+                status_post.main()
+        except SystemExit as e:
+            self.assertIn("usage", str(e).lower())
+        else:
+            self.fail("неполная команда обязана завершаться usage-сообщением")
 
 class RagPathTests(unittest.TestCase):
     """Поведенческие тесты RAG: FTS5-путь, fallback, резерв устройств, одиночный meta-запрос,
