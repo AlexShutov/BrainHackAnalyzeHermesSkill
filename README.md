@@ -1,4 +1,5 @@
 # Psychology analysis skill (installable on a clean Hermes)
+![License](https://img.shields.io/badge/license-MIT-blue) ![Python](https://img.shields.io/badge/python-3.10%2B-blue) ![Platform](https://img.shields.io/badge/platform-macos-lightgrey) ![Tests](https://img.shields.io/badge/tests-53%2F53-brightgreen)
 
 **Нейросетевой классификатор дообучен на классическом корпусе по пропаганде и манипуляциям** — база знаний построена на текстах:
 
@@ -175,3 +176,79 @@ scripts/book_ingest_pdf.py
 scripts/model_setup.py model_update_check.py model_update_run.py model_promote.py setup.sh
 plugin/psych-rag/                pre_gateway_dispatch hook (no core patch)
 ```
+
+---
+
+## Fixes — 18–19 октября 2026
+
+### 19 октября — критичные (то, что видно пользователю)
+
+- **🤢 без порога** — `tag()` ставил 🤢 на любое ненулевое insult/obscenity: p=0.01 размечал нейтральный комментарий. Теперь 🤢 только при p ≥ `TOX_LOW` (0.30), 🤮 при p ≥ 0.70 или двух токсичных метках сразу; `PRIORITY` и строка порядка в docstring приведены к фактическому порядку `tag()` (в docstring 🤢 вообще не было). [`a902e42`](https://github.com/AlexShutov/BrainHackAnalyzeHermesSkill/commit/a902e42)
+- **☠️ против собственного docstring** — docstring обещал, что «умер» в списке нет, но `DEATH` содержал «умер», «погиб», «смерт»: «умер мотор» и «кошка погибла» размечались как смерть человека. Теперь список разделён на сильные слова (сами говорят о человеке) и слабые, требующие человека-субъекта; цена правила зафиксирована. [`258f55a`](https://github.com/AlexShutov/BrainHackAnalyzeHermesSkill/commit/258f55a)
+- **Метка «приём» была невозможна** — `device_by_text` не передавал ни один из трёх путей (YouTube / Rutube / Telegram), и `tag()` возвращал имя устройства вместо пары подтипа: блок показывал «Ложная дилемма 3» вместо 🎭🧠. Общий модуль `scripts/tag_routing.py` (23 метки модели + семьи маркеров), `analyze()` строит пары через маркеры + вердикт, имя без пары больше не ставится. [`b7e779a`](https://github.com/AlexShutov/BrainHackAnalyzeHermesSkill/commit/b7e779a)
+- **Документированная команда молча теряла нейро-слой** — plain `python3` без torch, этот путь всегда лексикон, а доставляемый блок об этом не говорил. Теперь `analyze()` несёт `neural_unavailable`, `block()` печатает отдельную строку; когда нейро не запрашивали (явный лексикон для сверки), оговорки нет. [`04c1b16`](https://github.com/AlexShutov/BrainHackAnalyzeHermesSkill/commit/04c1b16)
+- **Гейт слоя 3 читает индекс абзаца из `para`** — у `repetition` поле `found` — склеенная строка слов, которой нет ни в одном абзаце, и абзац, помеченный только повтором, не доходил до модели. [`8fc7dd1`](https://github.com/AlexShutov/BrainHackAnalyzeHermesSkill/commit/8fc7dd1)
+- **Абзац длиннее 256 токенов** — `enc.ids[:256]` молча резал хвост: приём после 256 токенов был невидим. Теперь куски с перекрытием (`OVERLAP = 32`), по каждой метке берётся максимум вероятности между кусками, в JSON есть поле `chunk`. [`8fc7dd1`](https://github.com/AlexShutov/BrainHackAnalyzeHermesSkill/commit/8fc7dd1) [`4f131f8`](https://github.com/AlexShutov/BrainHackAnalyzeHermesSkill/commit/4f131f8)
+- **RAG видел только начало текста** — embedding-модель сама видит ~512 токена; retrieval опрашивается кусками по 1500 символов (проверено: полный запрос находит «Ложную дилемму» на позиции 3739, срез 1500 — нет). [`8fc7dd1`](https://github.com/AlexShutov/BrainHackAnalyzeHermesSkill/commit/8fc7dd1)
+- **Telethon `--limit 0`** — это ноль сообщений, а не «все»: пустой тред выглядел как «комментариев нет». `0 → None`. [`8fc7dd1`](https://github.com/AlexShutov/BrainHackAnalyzeHermesSkill/commit/8fc7dd1)
+- **Атрибуция абзаца для вердикта модели в пути комментариев** — `classifier.classify()` сама `para` не несёт (её добавляет тёплый worker), пары склеивались по ключу `None` и вердикт уходил не в тот абзац. Комментарий — один абзац: строке приписывается абзац маркерного hit-а; гейт слоя 3 сохранён. [`d7b8f60`](https://github.com/AlexShutov/BrainHackAnalyzeHermesSkill/commit/d7b8f60)
+
+### 19 октября — мажорные
+
+- **C1 — операционная точка 0.70 в рантайме**: плагин и `psych_layer` передают `--min 0.70` (14 из 23 порогов ниже 0.70, раньше применялся только `thresholds.npy`). [`9f7a4ab`](https://github.com/AlexShutov/BrainHackAnalyzeHermesSkill/commit/9f7a4ab)
+- **C2 — гейт плагина 4000 → 4096** (фактический лимит платформы): сообщения 4001–4096 не разбирались вообще. [`a2977e8`](https://github.com/AlexShutov/BrainHackAnalyzeHermesSkill/commit/a2977e8)
+- **C3 — одно определение треда и одно определение «среднего по тредам»**: Telegram и Rutube больше не строят тред по `reply_to`/`parent_id`, оба идут через `build_threads` (корень + все потомки); взвешенная версия показывается отдельной строкой. [`0054395`](https://github.com/AlexShutov/BrainHackAnalyzeHermesSkill/commit/0054395)
+- **M1–M7** — имя собственное язык не решает; фрагмент ≤3 слов язык не решает; `amb` не входит в долю не-русского; дубликат стема «не надо»; один порядок ничьи (`TIE_ORDER`); `END_MAP` стал достижимым (`SIDE_CLASS` был `{3,}`); у `side_share` появился порог. [`4f131f8`](https://github.com/AlexShutov/BrainHackAnalyzeHermesSkill/commit/4f131f8)
+- **N1–N11** — AMBIG/WEAK участвуют в решении; ветка `min_ev` перестала быть мёртвой; стоп-лист стал достижимым (28 из 29 слов были короче класса `{4,}` и никогда не могли быть выданы regex); status_post — контроль 4096 и 429, проверка аргументов; фильтр языка ловит `language:ru`, `--dry-run` не пишет ничего; guard на неизвестную модель и защита от None-метки в `id2label`; куски классификатора перекрываются; `fetch_transcript` печатает обещанное поле `language`; `rag_mcp` делит длинный запрос, бюджет применяется к слитому выводу; guard плагина покрывает все четыре блока; запросная часть открывает БД в `mode=ro`, незакрытые `open()` — через `scripts/util.py`. [`4f131f8`](https://github.com/AlexShutov/BrainHackAnalyzeHermesSkill/commit/4f131f8)
+- **`TOKEN_RE` не включал боковые буквы** (ў, є, ґ) — «быў» резалось на «бы», белорусское доказательство терялось. [`4f131f8`](https://github.com/AlexShutov/BrainHackAnalyzeHermesSkill/commit/4f131f8)
+
+### 18 октября
+
+- **Обрыв токенов в `classifier.py`** — `tokenizers.Encoding` нередактируемый, `enc.ids = enc.ids[:MAX_TOKENS]` падал на абзацах длиннее 512 токенов. [`f0bde34`](https://github.com/AlexShutov/BrainHackAnalyzeHermesSkill/commit/f0bde34)
+- **Потеря вывода статуса / спам в чат** — причина: `display.interim_assistant_messages = true` по умолчанию для Telegram; сделано per-platform override (в чат уходит только финальный ответ, прогресс живёт в правках статус-поста). Превью теперь всегда вверху поста. [`5e80135`](https://github.com/AlexShutov/BrainHackAnalyzeHermesSkill/commit/5e80135) [`6c2120d`](https://github.com/AlexShutov/BrainHackAnalyzeHermesSkill/commit/6c2120d)
+- **Лексикон комментариев** — совпадение было только подстрокой: «ураган» читался как радость, «классический» как радость; stems ≤3 chars ловятся только как целое слово, отрицание переворачивает категорию («не лучший» → недовольство), ничья решается детерминированно. [`9bfbe48`](https://github.com/AlexShutov/BrainHackAnalyzeHermesSkill/commit/9bfbe48)
+- **Однородность** — тред строился не по всей цепочке; «среднее по тредам» и взвешенное путались в одно число. [`b757f66`](https://github.com/AlexShutov/BrainHackAnalyzeHermesSkill/commit/b757f66)
+- **Детект мовы** — словарь стал живым, омонимы (па, ды, які, таму) не решают язык сами, доля считается по объёму текста, а не по числу комментариев; имена собственные (Євген, Григорій, Борщагівської — 245 вхождений в выборке) не дают 🐷 без второго доказательства; в словарь нельзя добавлять стем, совпадающий с русским словом. [`1ddf546`](https://github.com/AlexShutov/BrainHackAnalyzeHermesSkill/commit/1ddf546) [`f0bb481`](https://github.com/AlexShutov/BrainHackAnalyzeHermesSkill/commit/f0bb481)
+- **🐷 только за украинский** — белорусский (тоже «мова») обрабатывается как русский, без метки; `BE_WORDS` сузили: первая версия давала 60 ложных вставок на 800 живых комментариях из-за совпадающих с русским «мне», «мой», «была». [`76618ef`](https://github.com/AlexShutov/BrainHackAnalyzeHermesSkill/commit/76618ef) [`c74e4a8`](https://github.com/AlexShutov/BrainHackAnalyzeHermesSkill/commit/c74e4a8)
+- **Пороги — свойство конкретной модели** — кандидат без своих порогов не оценивается по порогам живой модели, продвижение чужих порогов отказано (`model_promote.py`), `--min` без значения даёт usage-сообщение вместо IndexError. [`212cbe0`](https://github.com/AlexShutov/BrainHackAnalyzeHermesSkill/commit/212cbe0)
+- **Разбор ссылки Telegram** — query (`?t=123`) попадал в id поста, имя канала портилось, `PeerChannel` читал `-1001543` как чат 1001543. [`fb4524a`](https://github.com/AlexShutov/BrainHackAnalyzeHermesSkill/commit/fb4524a)
+- **MAP против `devices.json`** — фальшивые семейства («логические», «эмоциональные», «внушение (книга)») никогда не могли совпасть с именем устройства; убраны, добавлена самопроверка словаря. [`a2d8aae`](https://github.com/AlexShutov/BrainHackAnalyzeHermesSkill/commit/a2d8aae)
+- **Единица абзаца общая для всех слоёв** (`markers.paragraphs`), полный текст абзаца в JSON `classifier.py` (обрезка 80 символов теряла маркер после 80-го символа), гейт классификатора в `psych_layer` по умолчанию. [`20b967c`](https://github.com/AlexShutov/BrainHackAnalyzeHermesSkill/commit/20b967c)
+- **Нейро-проход** — ярлыки берутся из `config.id2label` самой модели (жёсткий список обязан совпадать с порядком, иначе молча выдаётся другая эмоция), sigmoid для multi-label, `truncation=True, max_length=512` в коде. [`b5e9848`](https://github.com/AlexShutov/BrainHackAnalyzeHermesSkill/commit/b5e9848)
+- **Плагин** — гейт по абзацам (`MAX_PARAS` применялся не был), полный текст сообщения вместо первых 1500 (сигналы после 1500-го символа были невидимы), таймаут retrieval 2×, дедуп проверки версии по чату. [`f421c01`](https://github.com/AlexShutov/BrainHackAnalyzeHermesSkill/commit/f421c01) [`1d3ec99`](https://github.com/AlexShutov/BrainHackAnalyzeHermesSkill/commit/1d3ec99)
+- **Боковой канал для мовы без пересборки RAG** — приведение только на стороне запроса; «маніпуляцыя» → «манипуляция» (df 164) вместо фрагмента «пуляцыя» (df 0); индекс не перестроен (sha256 и mtime совпадают). [`2ccf1ad`](https://github.com/AlexShutov/BrainHackAnalyzeHermesSkill/commit/2ccf1ad)
+- **Замер слоя** — in-domain и real-world подаются отдельно; живая выборка с @kievreal1 (22 positives + 40 controls). [`707cd26`](https://github.com/AlexShutov/BrainHackAnalyzeHermesSkill/commit/707cd26)
+- **Установка на чистую машину** — `model_setup.py` хранил не фактическую revision (проверка версии всегда считала, что нужно обновление), чистка падала на каталоге staging и на `PermissionError`; `setup.sh` — выбор Python 3.11–3.14 (колёса onnxruntime), идемпотентный venv, путь навыка из расположения скрипта, отсутствовали `fastembed` и `pypdf`. [`8c0d365`](https://github.com/AlexShutov/BrainHackAnalyzeHermesSkill/commit/8c0d365) [`5231799`](https://github.com/AlexShutov/BrainHackAnalyzeHermesSkill/commit/5231799) [`bb4fd29`](https://github.com/AlexShutov/BrainHackAnalyzeHermesSkill/commit/bb4fd29) [`17c3dd6`](https://github.com/AlexShutov/BrainHackAnalyzeHermesSkill/commit/17c3dd6) [`f9673af`](https://github.com/AlexShutov/BrainHackAnalyzeHermesSkill/commit/f9673af) [`f12a9d4`](https://github.com/AlexShutov/BrainHackAnalyzeHermesSkill/commit/f12a9d4)
+- **`PSYCH_SKILL_DIR`** — навык можно клонировать под другим именем. [`7bccf54`](https://github.com/AlexShutov/BrainHackAnalyzeHermesSkill/commit/7bccf54)
+- **Единый путь ингеста** — fb2 идёт через `book_ingest` как остальные форматы. [`144ee42`](https://github.com/AlexShutov/BrainHackAnalyzeHermesSkill/commit/144ee42)
+
+### Улучшения (19 октября)
+
+- **FTS5 вместо полного прохода по корпусу** — `search()` сканировала каждую строку; добавлен триггер FTS5 (`porter unicode61`) + `search_fts()`, гибрид `0.4·BM25 + 0.6·cosine` считается по предвыборке, один общий meta-запрос на кандидатов. Замер на 20 запросах: 20,3 мс → 1,8 мс (11×), топ-6 совпадает на 19 из 20. [`425f6ee`](https://github.com/AlexShutov/BrainHackAnalyzeHermesSkill/commit/425f6ee)
+- **Тёплый worker вместо subprocess на каждое сообщение** — `scripts/worker.py` держит fastembed и ONNX загруженными, плагин говорит с ним по JSON-lines; холодный запуск 1,17 с → 0,003 с на запрос; при недоступности демона — деградация к subprocess-пути. [`861300b`](https://github.com/AlexShutov/BrainHackAnalyzeHermesSkill/commit/861300b)
+- **Единый входной модуль анализа комментариев** (`comment_analysis.py`) — один слой, одно определение треда, один приоритет тегов на всех трёх путях; Telegram-путь перешёл с лексикона на тот же нейро-слой (прежде числа были несопоставимы между платформами). [`67150c5`](https://github.com/AlexShutov/BrainHackAnalyzeHermesSkill/commit/67150c5)
+- **Хрупкие проверки-на-строку заменены проверкой поведения** — spy вызова, фикс-модель, fake `HTTPError`, ro-соединение; тест, который проверяет только текст исходника, помечается как проверка guard-а. [`66eab68`](https://github.com/AlexShutov/BrainHackAnalyzeHermesSkill/commit/66eab68)
+- **Правила написания тестов по итогам аудита** — spy работает только при импорте того же объекта модуля, импорт обязан быть в шапке файла, новый модуль читает файлы через `with open`, закреплённые числа тестов не являются фактом. [`5824263`](https://github.com/AlexShutov/BrainHackAnalyzeHermesSkill/commit/5824263)
+
+## Tests
+
+```bash
+/Users/alex/.hermes/tools/psych-rag-env/bin/python scripts/tests/test_layers.py
+```
+
+53 tests, stdlib only, ONNX/HF не грузятся (модели подменяются фиксами). Текущий прогон: 53/53.
+
+## Known issues (не починено)
+
+Зафиксировано сплошным проходом по коду 19 октября; тестами не покрыто:
+
+- `comment_sentiment.py` печатает ники и цитаты — против правила доставки «без ников и без цитат» (это тот вывод, который агент копирует в чат).
+- CLI `classifier.py` без `--min` применяет только `thresholds.npy` (14 из 23 порогов ниже 0.70) — операционная точка не применяется.
+- `status_post.py`: guard `"message is not modified"` недостижим, потому что `api()` выходит на любом не-429 `HTTPError` — heartbeat с той же строкой статуса роняет скрипт, пост зависает на последом успешном обновлении.
+- `NEURAL_BUCKET` — 27 из 28: метка `curiosity` без корзины, fallback на лексикон.
+- `MARKETING` слишком широкий: «для вас», «осталось », «90%», «по ссылке» — бытовые фразы дают 💸.
+- `block()` печатает «в среднем по тредам None%», когда измерить нечего; правило требует «не измеряется».
+- Проценты настроения через `round()`: на трёх категориях сумма 99, а не 100.
+- `cross_check` считается даже когда слой и есть лексикон — двойной проход по тому же словарю.
+- `neural_runner()` грузит модели на каждый вызов (тёплый worker есть только для плагина).
+- `version_check()` — сетевой запрос к hub на первое сообщение каждого чата стоит на пути входящего сообщения.
