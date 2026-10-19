@@ -156,6 +156,8 @@ def main():
     ap.add_argument("url")
     ap.add_argument("--limit", type=int, default=0, help="max comments (0 = all)")
     ap.add_argument("--json", action="store_true")
+    ap.add_argument("--no-neural", action="store_true",
+                    help="только лексикон (для сверки цифр); по умолчанию нейро-слой")
     args = ap.parse_args()
 
     cmd = [sys.executable, "-m", "yt_dlp", "--skip-download", "--write-comments",
@@ -181,19 +183,21 @@ def main():
                      "author": c.get("author"), "text": (c.get("text") or "").strip(),
                      "cat": cat, "shouty": shouty})
 
+    # Единый входной модуль анализа комментариев (`comment_analysis.py`): нейро-слой
+    # обязателен на каждом анализе по правилу навыка, лексикон — кросс-проверка.
+    # Определение треда и «среднего по тредам» общие; раньше YouTube-путь был единственным,
+    # где нейро применялся, и Telegram/Rutube доставляли числа по лексикону — пути
+    # расходились. Здесь все три пути идут через один модуль.
+    import comment_analysis as CA
+    res = CA.analyze(rows, use_neural=not args.no_neural)
     n = len(rows)
-    counts = {}
-    for row in rows:
-        counts[row["cat"]] = counts.get(row["cat"], 0) + 1
-    mood = {k: round(100 * v / n) for k, v in counts.items()}
-
-    # threads: корневой комментарий + ВСЕ его потомки (reply-on-reply в том же треде)
-    threads, by_id = build_threads(rows)
-    thread_lines, overall_hom, weighted_hom = thread_homogeneity(threads, by_id)
+    mood = res["mood"]
+    thread_lines, overall_hom, weighted_hom = res["threads"], res["overall"], res["weighted"]
 
     if args.json:
         print(json.dumps({"title": info.get("title"), "url": info.get("webpage_url"),
-                          "comments": n, "mood": mood,
+                          "comments": n, "layer": res["layer"], "mood": mood,
+                          "cross_check": res["cross_check"],
                           "homogeneity_overall": overall_hom,
                           "homogeneity_weighted": weighted_hom,
                           "threads": thread_lines}, ensure_ascii=False))

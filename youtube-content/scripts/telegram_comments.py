@@ -177,28 +177,26 @@ def cmd_comments(a):
     out(result)
 
 
-def sentiment_block(comments):
-    """Настроение + однородность тредов — тот же лексикон И то же определение треда,
-    что и comment_sentiment.py. Раньше здесь тред строился по reply_to: вложенный
-    ответ открывал новый тред, и на одном наборе комментариев пути давали разные
-    проценты (замер: 67% против 50%). Теперь все три пути (YouTube, Telegram, Rutube)
-    считают тред как корень + все потомки, и «в среднем по тредам» — простое среднее."""
+def sentiment_block(comments, use_neural=True):
+    """Единый блок анализа комментариев — один входной модуль на всех трёх путях
+    (`comment_analysis.py`). Правило навыка: нейро-слой обязателен на каждом анализе;
+    раньше Telegram считал только лексиконом, и доставляемые числа расходились в
+    зависимости от платформы. Теперь здесь тот же нейро-слой, что и на YouTube, а
+    лексикон остаётся кросс-проверкой. Определение треда и «среднего по тредам» —
+    те же, что в comment_sentiment (корень + все потомки, простое среднее).
+
+    `use_neural=False` — явный лексикон (для сверки цифр и для тестов)."""
     sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-    from comment_sentiment import classify, build_threads, thread_homogeneity
-    rows = []
-    for c in comments:
-        cat, _ = classify(c["text"])
-        rows.append({"id": c["id"], "parent": c["reply_to"] or "root",
-                     "author": c.get("author"), "text": c["text"], "cat": cat})
-    total = len(rows)
-    counts = {}
-    for r in rows:
-        counts[r["cat"]] = counts.get(r["cat"], 0) + 1
-    mood = {k: round(v * 100 / total) for k, v in counts.items()}
-    threads, by_id = build_threads(rows)
-    thread_lines, overall, weighted = thread_homogeneity(threads, by_id)
-    return {"mood": mood, "homogeneity_overall": overall,
-            "homogeneity_weighted": weighted, "threads": thread_lines}
+    import comment_analysis as CA
+    rows = [{"id": c["id"], "parent": c["reply_to"] or "root",
+             "author": c.get("author"), "text": c["text"]} for c in comments]
+    res = CA.analyze(rows, use_neural=use_neural)
+    tags = {}
+    for c in res["comments"]:
+        tags[c["tag"]] = tags.get(c["tag"], 0) + 1
+    return {"mood": res["mood"], "cross_check": res["cross_check"], "layer": res["layer"],
+            "homogeneity_overall": res["overall"], "homogeneity_weighted": res["weighted"],
+            "threads": res["threads"], "tags": tags}
 
 
 def main():

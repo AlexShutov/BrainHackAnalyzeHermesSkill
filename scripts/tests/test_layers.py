@@ -233,15 +233,12 @@ class TestOpenBugs(unittest.TestCase):
         telegram-путь не держит свой словарь и обязан совпадать с comment_sentiment."""
         if tele is None:
             self.skipTest("telethon не установлен")
-        src = read(os.path.join(YT, "telegram_comments.py"))
-        self.assertIn("from comment_sentiment import", src,
-                      "telegram-путь держит свой лексикон вместо общего")
         text = "злой и плохо"                      # ничья: злость и недовольство по одному
         lex = comment_sentiment.classify(text)[0]
         self.assertEqual(lex, "злость", "ничья в classify решается по TIE_ORDER")
         comments = [{"id": "R1", "reply_to": None, "text": text},
                     {"id": "R1.b1", "reply_to": "R1", "text": text}]
-        block = tele.sentiment_block(comments)
+        block = tele.sentiment_block(comments, use_neural=False)
         rows = [{"id": c["id"], "parent": c["reply_to"] or "root", "text": c["text"],
                  "author": None, "cat": comment_sentiment.classify(c["text"])[0]}
                 for c in comments]
@@ -249,6 +246,8 @@ class TestOpenBugs(unittest.TestCase):
         lex_dom = comment_sentiment.thread_homogeneity(th, by)[0][0]["dominant"]
         self.assertEqual(block["threads"][0]["dominant"], lex_dom,
                          "ничья в треде на telegram-пути решается не по TIE_ORDER")
+        self.assertEqual(block["layer"], "lexicon",
+                         "telegram-путь не идёт через общий модуль анализа")
 
     def test_neural_labels_have_no_none_and_known_models(self):
         src = read(os.path.join(YT, "neural_pass.py"))
@@ -278,7 +277,7 @@ class TestOpenBugs(unittest.TestCase):
         lex_hom = comment_sentiment.thread_homogeneity(th, by)[1]
         comments = [{"id": r["id"], "reply_to": None if r["parent"] == "root" else r["parent"],
                      "text": r["text"]} for r in rows]
-        block = tele.sentiment_block(comments)
+        block = tele.sentiment_block(comments, use_neural=False)
         self.assertEqual(block["homogeneity_overall"], lex_hom,
                          f"telegram-путь даёт {block['homogeneity_overall']}% против {lex_hom}% "
                          "— вложенный ответ открывает отдельный тред")
@@ -521,6 +520,76 @@ class WorkerTests(unittest.TestCase):
         c = wc.WorkerClient(python="/nonexistent/python")
         self.assertIsNone(c.call("ping"), "недоступный worker должен возвращать None, а не падать")
         c.stop()
+
+
+class CommentAnalysisTests(unittest.TestCase):
+    """Единый входной модуль комментариев: один и тот же слой на всех трёх путях,
+    отображение нейро-меток в корзины, приоритет тегов, общее определение треда."""
+
+    ROWS = [{"id": "1", "parent": "root", "author": "a", "text": "отличная работа, спасибо"},
+            {"id": "2", "parent": "1", "author": "b", "text": "злая бешеная критика без фактов"},
+            {"id": "3", "parent": "1", "author": "c", "text": "купите сейчас, только сегодня скидка"}]
+
+    SCORES = {"отличная работа, спасибо": {"emotion": {"joy": 0.9}, "toxicity": {"non-toxic": 0.9}, "sarcasm": {"positive": 0.8}},
+              "злая бешеная критика без фактов": {"emotion": {"anger": 0.8}, "toxicity": {"insult": 0.75}, "sarcasm": {"neutral": 0.6}},
+              "купите сейчас, только сегодня скидка": {"emotion": {"joy": 0.6}, "toxicity": {"non-toxic": 0.8}, "sarcasm": {"neutral": 0.7}}}
+
+    def fake_runner(self):
+        def run(texts, batch=32):
+            return {name: [self.SCORES.get(t, {}).get(name, {}) for t in texts]
+                    for name in ("emotion", "toxicity", "sarcasm")}
+        return run
+
+    def test_neural_bucket_mapping(self):
+        import comment_analysis as CA
+        res = CA.analyze(self.ROWS, runner=self.fake_runner())
+        self.assertEqual(res["layer"], "neural")
+        cats = [c["cat"] for c in res["comments"]]
+        self.assertEqual(cats, ["радость", "злость", "радость"],
+                         "нейро-метка не переведена в корзину доставляемого блока")
+        self.assertEqual(res["mood"].get("злость"), 33)
+        self.assertTrue(res["cross_check"], "кросс-проверка лексиконом пропала")
+
+    def test_tag_priority(self):
+        import comment_analysis as CA
+        res = CA.analyze(self.ROWS, runner=self.fake_runner())
+        tags = [c["tag"] for c in res["comments"]]
+        self.assertEqual(tags[2], "💸", "продающий язык обязан быть приоритетнее эмоции")
+        self.assertEqual(tags[1], "🤮", "токсичность p>=0.70 обязана давать 🤮")
+        self.assertEqual(tags[0], "😊")
+
+    def test_all_three_paths_use_the_same_entry_point(self):
+        import comment_analysis as CA
+        real = CA.neural_runner
+        CA.neural_runner = lambda models=None: self.fake_runner()
+        try:
+            shared = CA.analyze(self.ROWS)
+            if tele is not None:
+                comments = [{"id": r["id"], "reply_to": None if r["parent"] == "root" else r["parent"],
+                             "author": r["author"], "text": r["text"]} for r in self.ROWS]
+                tg = tele.sentiment_block(comments)
+                self.assertEqual(tg["mood"], shared["mood"],
+                                 "Telegram-путь считает по другому слою")
+                self.assertEqual(tg["homogeneity_overall"], shared["overall"])
+                self.assertEqual(tg["layer"], "neural", "Telegram-путь остался на лексиконе")
+            lex = CA.analyze(self.ROWS, use_neural=False)
+            self.assertEqual(lex["layer"], "lexicon",
+                             "без моделей слой обязан честно сообщить, что работает лексиконом")
+            self.assertEqual(lex["mood"], lex["cross_check"])
+        finally:
+            CA.neural_runner = real
+
+    def test_thread_definition_is_the_shared_one(self):
+        import comment_analysis as CA
+        res = CA.analyze(self.ROWS, runner=self.fake_runner())
+        # reply-on-reply остаётся в том же треде: один тред с корнем id=1 и двумя потомками
+        self.assertEqual(len(res["threads"]), 1)
+        self.assertEqual(res["threads"][0]["size"], 3)
+        # доминирует та категория, которой больше в треде (2 радость против 1 злость),
+        # однородность = доля доминирующих из содержательных комментариев
+        self.assertEqual(res["threads"][0]["dominant"], "радость")
+        self.assertEqual(res["threads"][0]["homogeneity"], 67)
+        self.assertEqual(res["overall"], 67)
 
 
 if __name__ == "__main__":

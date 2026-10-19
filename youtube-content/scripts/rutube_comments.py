@@ -58,21 +58,19 @@ def main():
     for row in rows:
         row["cat"], row["shouty"] = classify(row["text"])
 
+    # Единый входной модуль анализа комментариев (`comment_analysis.py`): тот же
+    # нейро-слой, что и на YouTube-пути, лексикон — кросс-проверка. Определение треда
+    # и «среднего по тредам» общие (build_threads / thread_homogeneity); раньше Rutube
+    # считал только лексиконом, и доставляемые числа между путями не сравнивались.
+    import comment_analysis as CA
+    res = CA.analyze(rows)
     n = len(rows)
-    counts = {}
-    for row in rows:
-        counts[row["cat"]] = counts.get(row["cat"], 0) + 1
-    mood = {k: round(100 * v / n) for k, v in counts.items()}
-
-    # то же определение треда (корень + все потомки) и то же «среднее по тредам»
-    # (простое), что и в comment_sentiment: раньше здесь тред строился по parent_id —
-    # вложенный ответ открывал новый тред, а «в среднем по тредам» выдавался
-    # взвешенным средним, и цифры между путями не сравнивались
-    threads, by_id = build_threads(rows)
-    thread_lines, overall_hom, weighted_hom = thread_homogeneity(threads, by_id)
+    mood = res["mood"]
+    thread_lines, overall_hom, weighted_hom = res["threads"], res["overall"], res["weighted"]
 
     if args.json:
-        print(json.dumps({"url": args.url, "comments": n, "mood": mood,
+        print(json.dumps({"url": args.url, "comments": n, "layer": res["layer"],
+                          "mood": mood, "cross_check": res["cross_check"],
                           "homogeneity_overall": overall_hom,
                           "homogeneity_weighted": weighted_hom,
                           "threads": thread_lines},
