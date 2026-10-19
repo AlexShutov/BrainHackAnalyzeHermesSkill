@@ -1771,6 +1771,53 @@ class WorkerLifecycleTests(SnapshotMixin, unittest.TestCase):
         finally:
             w.current_rss_kb = real
 
+    def test_guard_silent_when_only_the_matrix_is_loaded(self):
+        """Косинус-матрица — не модельный слой. Прежде `any(state.values())` считала её
+        «чем-то загруженным»: guard срабатывал на пике RSS, писал `released_kb: 0` —
+        освобождение, которого не было — и ставил флаг навсегда, то есть один пик убивал
+        нейро-слой до конца жизни долгоживущего процесса гейтвея."""
+        w = importlib.import_module("worker")
+        state = {"embedding": None, "classifier": None, "neural": None,
+                 "matrix": ([1], [2])}
+        resp = {"ok": True, "results": []}
+        w.current_rss_kb = lambda: w.RSS_LIMIT_KB + 1000
+        self.assertFalse(w.guard_memory(resp, state))
+        self.assertNotIn("memory", resp)
+        self.assertIsNotNone(state["matrix"])       # guard не трогает то, что не модель
+
+    def test_guard_says_when_release_returned_nothing(self):
+        """Освобождение произошло, но RSS не упал — аллокатор macOS страницы ОС не отдаёт.
+        Заметка обязана сказать это прямо, а не подать 0 КБ как эффективное освобождение."""
+        w = importlib.import_module("worker")
+        state = {"embedding": object(), "classifier": None,
+                 "neural": {"x": object()}, "matrix": None}
+        resp = {"ok": True, "markers": []}
+        w.current_rss_kb = lambda: w.RSS_LIMIT_KB + 1000
+        self.assertTrue(w.guard_memory(resp, state))
+        self.assertEqual(resp["memory"]["released_kb"], 0)
+        self.assertTrue(resp["memory"]["rss_did_not_drop"])
+        self.assertTrue(all(v is None for v in state.values()))
+
+    def test_guard_counts_rss_once_per_request(self):
+        """Проверка RSS — ОДИН раз на запрос, и это же значение передаётся в release_models
+        как «до». Прежний код снимал RSS дважды для одной проверки (3.3 мс на вызов —
+        лишние ~7 мс на сообщение в горячем пути, где тёплый путь мерился как 84 мс);
+        всего на сработавший запрос остаётся проверка плюс замер «после» gc."""
+        w = importlib.import_module("worker")
+        state = {"embedding": object(), "classifier": None, "neural": None, "matrix": None}
+        resp = {"ok": True, "markers": []}
+        calls, seq = [], [w.RSS_LIMIT_KB + 1000, w.RSS_LIMIT_KB - 500]
+
+        def fake():
+            calls.append(1)
+            return seq.pop(0) if seq else w.RSS_LIMIT_KB
+        w.current_rss_kb = fake
+        self.assertTrue(w.guard_memory(resp, state))
+        self.assertEqual(len(calls), 2)          # проверка + замер после gc, не дважды для проверки
+        self.assertEqual(resp["memory"]["rss_kb"], w.RSS_LIMIT_KB + 1000)
+        self.assertEqual(resp["memory"]["released_kb"], 1500)
+        self.assertFalse(resp["memory"]["rss_did_not_drop"])
+
     def test_neural_gate_released_beats_empty_state(self):
         """Пустой dict после освобождения читается как «загрузить заново» — это вернуло бы
         те же гигабайты, ради которых их освободили. Флаг released обязан быть важнее."""
@@ -1805,7 +1852,8 @@ class WorkerLifecycleTests(SnapshotMixin, unittest.TestCase):
         try:
             w.current_rss_kb = lambda: w.RSS_LIMIT_KB + 1000
             resp = {"ok": True, "scores": {}}
-            state = {"emotion": object()}
+            state = {"embedding": None, "classifier": None,
+                     "neural": {"emotion": object()}, "matrix": None}
             self.assertTrue(w.guard_memory(resp, state))
             self.assertIn("memory", resp)
             self.assertTrue(all(v is None for v in state.values()))

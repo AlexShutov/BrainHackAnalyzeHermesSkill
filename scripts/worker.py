@@ -87,18 +87,32 @@ def idle_release_due(last_neural, now, seconds=None):
     return (now - last_neural) >= (NEURAL_IDLE_RELEASE if seconds is None else seconds)
 
 
+MODEL_LAYERS = ("embedding", "classifier", "neural")
+
+
 def guard_memory(resp, state):
     """Память добавляется к ТОМУ ЖЕ ответу, а не отдельным сообщением. Отдельный emit
-    сдвигает ответы клиента: следующий запрос читает строку предыдущего (замер живым
-    прогоном — после guard ответ на `markers` пришёл как `neural released`). Возвращает
-    True, если освобождение произошло. Guard молчит, когда освобождать нечего: dict со
-    всеми None — это «нечего», иначе он сообщает освобождение, которого не было."""
-    if not any(state.values()) or not should_release(current_rss_kb(), RSS_LIMIT_KB):
+    сдвигает ответы клиента: следующий запрос читает строку предыдущего (живая проверка
+    показала ответ на `markers` как `neural released`). Возвращает True, если освобождение
+    произошло.
+
+    Guard молчит, когда освобождать нечего из слоёв-моделей: косинус-матрица — не
+    модельный слой, и прежде `any(state.values())` считал её «чем-то загруженным»: guard
+    срабатывал на транзиторном пике RSS, писал `released_kb: 0` — освобождение, которого
+    не было — и ставил флаг навсегда, то есть один пик убивал нейро-слой до конца жизни
+    долгоживущего процесса. Если освобождение фактически ничего не вернуло (аллокатор
+    macOS не отдаёт страницы ОС), заметка обязана сказать это прямо, а не подать ноль как
+    эффективное освобождение. RSS считается ОДИН раз на запрос: прежний вызывал
+    `current_rss_kb()` дважды (3.3 мс на вызов — лишние ~7 мс на сообщение в горячем
+    пути)."""
+    if not any(state.get(k) for k in MODEL_LAYERS):
         return False
     rss = current_rss_kb()
-    freed = release_models(state)
+    if not should_release(rss, RSS_LIMIT_KB):
+        return False
+    freed = release_models(state, rss)
     resp["memory"] = {"rss_kb": rss, "released_kb": freed, "limit_kb": RSS_LIMIT_KB,
-                      "neural_released": True}
+                      "models_released": True, "rss_did_not_drop": freed == 0}
     return True
 
 
@@ -124,15 +138,18 @@ def should_release(rss_kb, limit_kb):
     return rss_kb > limit_kb
 
 
-def release_models(state):
+def release_models(state, before=None):
     """Освободить загруженные слои и вернуть оценку освобождённых КБ (RSS до и после gc).
     Освобождается ВСЁ, что держит процесс: fastembed (~1.8 ГБ с ONNX-классификатором) и
     HF-модели нейро-прохода. Прежний guard освобождал только HF-модели — то есть на
     16 ГБ машине после «освобождения» в памяти оставалось 1.8 ГБ, и читатель видел
-    освобождение, которого не было."""
+    освобождение, которого не было.
+    `before` — уже измеренный RSS: guard меряет его один раз на запрос и передаёт сюда,
+    иначе одно и то же значение снималось бы дважды."""
     if not any(state.values()):
         return 0
-    before = current_rss_kb()
+    if before is None:
+        before = current_rss_kb()
     for k in list(state):
         state[k] = None
     gc.collect()
