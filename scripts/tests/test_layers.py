@@ -419,6 +419,175 @@ class TestOpenBugs(unittest.TestCase):
         self.assertIn("NP.infer(", src,
                       "comment_analysis держит свой цикл батча — два источника одного правила")
 
+    def test_fetch_comments_caches_by_video_id_and_carries_id(self):
+        """Поведение: правило — повторный анализ того же видео не перекачивает (кэш по
+        video id в scratch), и каноническая форма комментария обязана несть `id`: без него
+        build_threads не строит тред по цепочке, а угадывает корень по префиксу parent.
+        Тест без сети: runner подменён, кэш — временный каталог.
+        Partial-набор (yt-dlp сам остановился) обязан перекачиваться, когда запрошено
+        больше, чем лежит: выдавать partial за полный нельзя. И скрипт не имеет права
+        выдумывать опцию — --max-comments в этой версии yt-dlp нет (проверено на --help),
+        поэтому --limit обрезает только вывод, а полнота проверяется размером кэша."""
+        import fetch_comments as FC
+        cache = tempfile.mkdtemp()
+        calls = []
+
+        def runner(url):
+            calls.append(url)
+            return {"title": "T", "webpage_url": url,
+                    "comments": [{"id": f"R{i}", "parent": None, "author": "a",
+                                  "text": f"текст {i}", "like_count": i}
+                                 for i in range(3)]}
+
+        url = "https://www.youtube.com/watch?v=aaaaaaaaaaa&t=123"
+        self.assertEqual(FC.video_id(url), "aaaaaaaaaaa",
+                         "запрос ?t=123 обязан обрезаться до id")
+        self.assertNotIn("--max-comments", FC.build_cmd(url),
+                         "выдуманная опция yt-dlp: качание комментариев не ограничивается")
+
+        meta, comments, hit = FC.fetch(url, limit=10, runner=runner, cache_dir=cache)
+        self.assertEqual(len(calls), 1, "первый заход обязан качать")
+        self.assertFalse(hit, "первый заход не может быть попаданием в кэш")
+        self.assertTrue(all(c["id"] for c in comments), "каноническая форма без поля id")
+
+        meta2, comments2, hit2 = FC.fetch(url, limit=2, runner=runner, cache_dir=cache)
+        self.assertTrue(hit2, "кэш покрывает запрос — обязан сработать без сети")
+        self.assertEqual(len(calls), 1, "покрытие кэша не имеет права вызывать runner")
+        self.assertEqual(len(comments2), 2, "кэш обязан уважать запрошенный limit")
+
+        meta3, comments3, hit3 = FC.fetch(url, limit=10, runner=runner, cache_dir=cache)
+        self.assertFalse(hit3, "partial-кэш (3 из запрошенных 10) нельзя выдавать за полный")
+        self.assertEqual(len(calls), 2, "partial-кэш обязан вызвать перекачивание")
+
+    def test_fetch_comments_finds_yt_dlp_without_manual_pythonpath(self):
+        """Поведение: yt-dlp живёт в изолированном target dir, а не в venv навыка.
+        Замер на этой машине: find_spec('yt_dlp') -> None, и subprocess падал с
+        ModuleNotFoundError, пока PYTHONPATH не задали вручную. Скрипт обязан сам
+        добавить fallback-каталог в env ребёнка и не затирать уже заданный."""
+        import fetch_comments as FC
+        import importlib.util as u
+        if u.find_spec("yt_dlp") is not None:
+            self.skipTest("yt_dlp импортируется в этом interpreters — fallback не нужен")
+        if not os.path.isdir(FC.FALLBACK_PYLIB):
+            self.skipTest(f"fallback-каталог {FC.FALLBACK_PYLIB} не установлен")
+        saved = os.environ.get("PYTHONPATH")
+        try:
+            os.environ.pop("PYTHONPATH", None)
+            env = FC.child_env()
+            self.assertIn("yt-pylib", env.get("PYTHONPATH", ""),
+                          "fallback-каталог не добавлен — скрипт падает на ModuleNotFoundError")
+            os.environ["PYTHONPATH"] = "/x"
+            env2 = FC.child_env()
+            self.assertTrue(env2.get("PYTHONPATH", "").endswith("/x"),
+                            "уже заданный PYTHONPATH обязан сохраниться")
+        finally:
+            if saved is None:
+                os.environ.pop("PYTHONPATH", None)
+            else:
+                os.environ["PYTHONPATH"] = saved
+
+    def test_promote_gate_refuses_foreign_thresholds(self):
+        """Поведение: пороги — свойство конкретной модели. Тест строит staging, где пороги
+        кандидата байтово совпадают с живыми (это пороги другой модели), и где их число не
+        совпадает с числом меток; в обоих случаях продвижение отказывает и не трогает живую
+        модель. Отдельно — отказ по неготовому состоянию и по отсутствию порогов, и --force
+        как единственный обход."""
+        import model_promote as MP
+        d = tempfile.mkdtemp()
+        models, staging = os.path.join(d, "models"), os.path.join(d, "staging")
+        os.makedirs(models); os.makedirs(staging)
+        open(os.path.join(models, "classifier_int8.onnx"), "wb").write(b"LIVE")
+        open(os.path.join(staging, "classifier_int8.onnx"), "wb").write(b"NEW")
+        import numpy as np
+        np.save(os.path.join(models, "thresholds.npy"), np.array([0.7, 0.6]))
+        state = os.path.join(models, "update_state.json")
+        orig_models, orig_state = MP.MODELS, MP.STATE
+        MP.MODELS, MP.STATE = models, state
+        try:
+            def write_state(status):
+                with open(state, "w", encoding="utf-8") as f:
+                    json.dump({"status": status, "staging": staging,
+                               "candidate": {"model_id": "x"}}, f)
+            def run():
+                buf = io.StringIO()
+                argv = sys.argv
+                sys.argv = ["model_promote.py"]
+                try:
+                    with contextlib.redirect_stderr(buf):
+                        rc = MP.main()
+                finally:
+                    sys.argv = argv
+                return rc, buf.getvalue()
+
+            write_state("needs_update")
+            rc, err = run()
+            self.assertEqual(rc, 1, "продвижение неготового состояния не отказало")
+            self.assertIn("нужна успешная проверка", err)
+
+            write_state("ready")
+            np.save(os.path.join(staging, "thresholds.npy"), np.array([0.7, 0.6]))
+            rc, err = run()
+            self.assertEqual(rc, 1, "пороги другой модели продвинулись молча")
+            self.assertIn("идентичны", err)
+            self.assertEqual(open(os.path.join(models, "classifier_int8.onnx"), "rb").read(), b"LIVE",
+                             "отказ обязан не трогать живую модель")
+
+            np.save(os.path.join(staging, "thresholds.npy"), np.array([0.5]))
+            with open(os.path.join(staging, "labels.txt"), "w", encoding="utf-8") as f:
+                f.write("a\nb\n")
+            rc, err = run()
+            self.assertEqual(rc, 1, "несовпадение длины порогов и меток не отказало")
+            self.assertIn("не совпадает", err)
+
+            os.remove(os.path.join(staging, "thresholds.npy"))
+            rc, err = run()
+            self.assertEqual(rc, 1, "кандидат без своих порогов продвинулся молча")
+            self.assertIn("калибровка", err)
+
+            np.save(os.path.join(staging, "thresholds.npy"), np.array([0.5, 0.4]))
+            rc, out = run()
+            self.assertEqual(rc, 0, f"корректное продвижение отказало: {out}")
+            self.assertEqual(open(os.path.join(models, "classifier_int8.onnx"), "rb").read(), b"NEW")
+        finally:
+            MP.MODELS, MP.STATE = orig_models, orig_state
+
+    def test_version_check_is_once_per_chat_and_once_per_day(self):
+        """Поведение: ключ проверки версии — (platform, chat_id), а не процесс: новый чат
+        обязан получить свою проверку, прежний — не раньше суток. Тест подменяет subprocess
+        и время (и восстанавливает их — без восстановления подмена остаётся на весь прогон)
+        и считает вызовы."""
+        import types
+        pl = load_plugin()
+        calls = []
+
+        def fake_run(args, **kw):
+            calls.append(args)
+            return types.SimpleNamespace(returncode=0, stdout='{"status": "needed"}', stderr="")
+
+        class FakeSrc:
+            def __init__(self, p, c): self.platform, self.chat_id = p, c
+
+        orig_run, orig_time = pl.subprocess, pl.time
+        pl.subprocess, pl.time = types.SimpleNamespace(run=fake_run), types.SimpleNamespace(time=lambda: 1000.0)
+        try:
+            pl._checked.clear()
+            self.assertIsNotNone(pl.version_check(FakeSrc("telegram", 111)),
+                                 "первое сообщение чата обязано дать проверку")
+            self.assertEqual(len(calls), 1)
+            self.assertIsNone(pl.version_check(FakeSrc("telegram", 111)),
+                              "тот же чат не имеет права перепроверять в пределах суток")
+            self.assertEqual(len(calls), 1, "лишний subprocess на тот же чат в пределах суток")
+            self.assertIsNotNone(pl.version_check(FakeSrc("telegram", 222)),
+                                 "новый чат обязан получить свою проверку")
+            self.assertEqual(len(calls), 2)
+            pl.time = types.SimpleNamespace(time=lambda: 1000.0 + pl.RECHECK_SECONDS + 1)
+            self.assertIsNotNone(pl.version_check(FakeSrc("telegram", 111)),
+                                 "сутки прошли — чат обязан быть перепроверен")
+            self.assertEqual(len(calls), 3)
+        finally:
+            pl.subprocess, pl.time = orig_run, orig_time
+            pl._checked.clear()
+
     # --- новое, найденное этим проходом ---
     def test_runtime_classifier_operating_point(self):
         """Поведение: порог = max(thresholds.npy, min_conf). Фикс ONNX даёт Doubt с p=0.60
