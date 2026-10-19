@@ -1,5 +1,5 @@
 # Psychology analysis skill (installable on a clean Hermes)
-![License](https://img.shields.io/badge/license-MIT-blue) ![Python](https://img.shields.io/badge/python-3.10%2B-blue) ![Platform](https://img.shields.io/badge/platform-macos-lightgrey) ![Tests](https://img.shields.io/badge/tests-53%2F53-brightgreen)
+![License](https://img.shields.io/badge/license-MIT-blue) ![Python](https://img.shields.io/badge/python-3.10%2B-blue) ![Platform](https://img.shields.io/badge/platform-macos-lightgrey) ![Tests](https://img.shields.io/badge/tests-68%2F68-brightgreen)
 
 **Нейросетевой классификатор дообучен на классическом корпусе по пропаганде и манипуляциям** — база знаний построена на текстах:
 
@@ -233,6 +233,8 @@ plugin/psych-rag/                pre_gateway_dispatch hook (no core patch)
 - **Единый входной модуль анализа комментариев** (`comment_analysis.py`) — один слой, одно определение треда, один приоритет тегов на всех трёх путях; Telegram-путь перешёл с лексикона на тот же нейро-слой (прежде числа были несопоставимы между платформами). [`67150c5`](https://github.com/AlexShutov/BrainHackAnalyzeHermesSkill/commit/67150c5)
 - **Хрупкие проверки-на-строку заменены проверкой поведения** — spy вызова, фикс-модель, fake `HTTPError`, ro-соединение; тест, который проверяет только текст исходника, помечается как проверка guard-а. [`66eab68`](https://github.com/AlexShutov/BrainHackAnalyzeHermesSkill/commit/66eab68)
 - **Правила написания тестов по итогам аудита** — spy работает только при импорте того же объекта модуля, импорт обязан быть в шапке файла, новый модуль читает файлы через `with open`, закреплённые числа тестов не являются фактом. [`5824263`](https://github.com/AlexShutov/BrainHackAnalyzeHermesSkill/commit/5824263)
+- **Сетевой telegram-путь стал тестируемым** — `fetch_comments(client, ...)` принимает клиент извне (mock-transport), `--dry-run` работает без Telethon-сессии (порядок: разбор ссылки → dry-run → проверка логина; прежде offline-режим возвращал `login_required` именно там, где был нужен). `limit=0 → None` («все»), каноническая форма комментария с `id`. [`215014e`](https://github.com/AlexShutov/BrainHackAnalyzeHermesSkill/commit/215014e)
+- **Восстановление подменённых атрибутов модулей** — `SnapshotMixin` снимает `__dict__` всех модулей навыка в `setUp` и восстанавливает в `tearDown`; 24 присваиваний вида `mod.attr =` были без `finally`, и тест, который проходил отдельно, падал в полном прогоне (загрязнение от другого теста — ложеловный «успех»). Поведенческий тест + guard наследования. [`8e0a17d`](https://github.com/AlexShutov/BrainHackAnalyzeHermesSkill/commit/8e0a17d)
 
 ## Tests
 
@@ -240,7 +242,7 @@ plugin/psych-rag/                pre_gateway_dispatch hook (no core patch)
 /Users/alex/.hermes/tools/psych-rag-env/bin/python scripts/tests/test_layers.py
 ```
 
-61 tests, stdlib only, ONNX/HF не грузятся (модели подменяются фиксами). Текущий прогон: 61/61.
+68 tests, stdlib only, ONNX/HF не грузятся (модели подменяются фиксами). Текущий прогон: 68/68.
 
 ## Known issues (не починено)
 
