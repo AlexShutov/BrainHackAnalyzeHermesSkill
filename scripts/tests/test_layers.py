@@ -12,7 +12,7 @@
      Они падают — это и есть остаток багов; тест их не «чинит», он показывает,
      где правило расходится с кодом. Такие тесты помечены в docstring.
 """
-import contextlib, importlib.util, io, json, os, re, sys, tempfile, unittest
+import contextlib, importlib.util, io, json, os, re, subprocess, sys, tempfile, unittest
 import numpy as np
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -1687,6 +1687,172 @@ class CommentAnalysisTests(SnapshotMixin, unittest.TestCase):
         out3 = CA.block(CA.analyze([], use_neural=False, use_markers=False))
         self.assertNotIn("None%", out3, "пустой набор печатает None%")
         self.assertIn("не измеряется", out3)
+
+
+# --- жизненный цикл worker: память и утечки (замер: 2.34 ГБ RSS на живой процесс) ---
+
+def _alive(pid):
+    return subprocess.run(["ps", "-p", str(pid)], capture_output=True).stdout.count(b"\n") > 1
+
+
+def _start_worker(env):
+    p = subprocess.Popen([sys.executable, os.path.join(SCRIPTS, "worker.py")],
+                         stdin=subprocess.PIPE, stdout=subprocess.PIPE, env=env)
+    hello = json.loads(p.stdout.readline().decode())
+    return p, hello
+
+
+class WorkerLifecycleTests(SnapshotMixin, unittest.TestCase):
+    def test_worker_exits_on_idle(self):
+        """Простой: worker не имеет права сидеть с моделями без запросов. Без выхода по
+        простою живой процесс держит 2.34 ГБ RSS до конца своей жизни — на 16 ГБ машине
+        это не тёплый кэш, а риск свопa."""
+        env = dict(os.environ, PSYCH_WORKER_NO_MODELS="1", PSYCH_WORKER_IDLE="1")
+        p, hello = _start_worker(env)
+        self.assertEqual(hello.get("idle_s"), 1)
+        # stdin НЕ закрываем: завершение должно быть именно по простою
+        try:
+            rc = p.wait(timeout=6)
+        except subprocess.TimeoutExpired:
+            p.kill()
+            self.fail("worker не вышел по простою — он остаётся в памяти")
+        self.assertEqual(rc, 0)
+
+    def test_worker_exits_on_client_eof(self):
+        env = dict(os.environ, PSYCH_WORKER_NO_MODELS="1", PSYCH_WORKER_IDLE="300")
+        p, hello = _start_worker(env)
+        p.stdin.close()
+        try:
+            rc = p.wait(timeout=6)
+        except subprocess.TimeoutExpired:
+            p.kill()
+            self.fail("worker пережил EOF клиента — висячий процесс с моделями")
+        self.assertEqual(rc, 0)
+
+    def test_parent_death_detected(self):
+        w = importlib.import_module("worker")
+        real = os.getppid
+        try:
+            os.getppid = lambda: 1
+            self.assertTrue(w.parent_changed(999))
+        finally:
+            os.getppid = real
+        self.assertFalse(w.parent_changed(os.getppid()))
+
+    def test_memory_guard_uses_current_rss_not_peak(self):
+        """ru_maxrss — ПИК за жизнь процесса, он никогда не уменьшается: пиковый guard
+        сработал бы один раз и остался «вечно превышенным» после освобождения моделей."""
+        w = importlib.import_module("worker")
+        real = w.current_rss_kb
+        try:
+            w.current_rss_kb = lambda: w.RSS_LIMIT_KB - 1000
+            self.assertFalse(w.should_release(w.current_rss_kb(), w.RSS_LIMIT_KB))
+            w.current_rss_kb = lambda: w.RSS_LIMIT_KB + 1000
+            self.assertTrue(w.should_release(w.current_rss_kb(), w.RSS_LIMIT_KB))
+        finally:
+            w.current_rss_kb = real
+
+    def test_memory_guard_releases_models_and_reports(self):
+        w = importlib.import_module("worker")
+        state = {"emotion": object(), "toxicity": object()}
+        real = w.current_rss_kb
+        seq = [w.RSS_LIMIT_KB + 1000, w.RSS_LIMIT_KB - 500]   # RSS до / после освобождения
+        try:
+            w.current_rss_kb = lambda: seq.pop(0)
+            freed = w.release_neural(state)
+            self.assertEqual(state, {})
+            self.assertEqual(freed, 1500)
+            self.assertEqual(w.release_neural({}), 0)   # нечего освобождать — не делит на ноль
+        finally:
+            w.current_rss_kb = real
+
+    def test_neural_gate_released_beats_empty_state(self):
+        """Пустой dict после освобождения читается как «загрузить заново» — это вернуло бы
+        те же гигабайты, ради которых их освободили. Флаг released обязан быть важнее."""
+        w = importlib.import_module("worker")
+        self.assertEqual(w.neural_gate({}, True), "released")
+        self.assertEqual(w.neural_gate({}, False), "load")
+        self.assertEqual(w.neural_gate({"emotion": object()}, False), "run")
+
+    def test_released_guard_does_not_reload_models_in_caller(self):
+        ca = importlib.import_module("comment_analysis")
+        loads = []
+
+        class FakeClient:
+            def call(self, op, **kw):
+                return {"ok": False, "released": True}
+
+        runner = ca.neural_runner(client=FakeClient(),
+                                  loader=lambda models=None: loads.append(1) or None)
+        r = ca.analyze([{"id": "1", "parent": "root", "author": "a", "text": "отлично"}],
+                       runner=runner)
+        self.assertEqual(loads, [], "caller перезагрузил модели, хотя worker отдал память")
+        self.assertTrue(r.get("neural_released"))
+        self.assertEqual(r["layer"], "lexicon")
+        self.assertIn("memory guard", ca.block(r))
+
+    def test_memory_guard_appends_to_the_same_response(self):
+        """Один ответ на один запрос. Отдельный emit сдвигает ответы клиента: следующий
+        запрос читает строку предыдущего — живая проверка показала, что ответ на `markers`
+        пришёл как `neural released`. Guard обязан добавлять память к тому же dict."""
+        w = importlib.import_module("worker")
+        real = w.current_rss_kb
+        try:
+            w.current_rss_kb = lambda: w.RSS_LIMIT_KB + 1000
+            resp = {"ok": True, "scores": {}}
+            state = {"emotion": object()}
+            self.assertTrue(w.guard_memory(resp, state))
+            self.assertIn("memory", resp)
+            self.assertEqual(state, {})
+            resp2 = {"ok": True, "markers": []}
+            self.assertFalse(w.guard_memory(resp2, state))   # нечего освобождать — guard молчит
+            self.assertNotIn("memory", resp2)
+        finally:
+            w.current_rss_kb = real
+
+    def test_default_limit_is_above_steady_state_rss(self):
+        """Штатный RSS загруженного worker — 3.39 ГБ (замер на этой машине: fastembed +
+        ONNX + три HF-модели в одном процессе; 2.34 ГБ — только HF-модели). Если лимит
+        ниже, guard срабатывает на первом запросе и нейро-слой никогда не работает:
+        живая проверка показала, что числа получил словарь."""
+        w = importlib.import_module("worker")
+        self.assertGreater(w.RSS_LIMIT_KB, 3_390_000)
+
+    def test_loop_emits_once_per_request(self):
+        """Guard-проверка (не поведенческая): ops обязаны возвращать dict, а не emit —
+        иначе guard пишет вторую строку и ответы клиента разъезжаются."""
+        src = read(os.path.join(SCRIPTS, "worker.py"))
+        loop = src[src.index("while True:"):]
+        self.assertIn("resp = dispatch(req)", loop)
+        self.assertEqual(loop.count("emit("), 4,
+                        "в цикле должны emit-иться только guard-строки (idle, parent, bad json) и resp")
+
+    def test_idle_release_and_pending_note(self):
+        """Память на паузе: долгий хозяин (гейтвей) живёт часами, и 3.4 ГБ модельного RSS
+        в нём — занятая память. Модели освобождаются, процесс остаётся, следующий запрос
+        вправе загрузить заново (это не guard). Заметка едет в ответе на запрос, а не
+        отдельной строкой — отдельная строка сдвинула бы ответы клиента."""
+        w = importlib.import_module("worker")
+        self.assertTrue(w.idle_release_due(0, 130, 120))
+        self.assertFalse(w.idle_release_due(0, 119, 120))
+        resp = {"ok": True, "markers": []}
+        self.assertFalse(w.attach_pending(resp, None))
+        self.assertTrue(w.attach_pending(resp, {"idle_release": True, "released_kb": 900_000}))
+        self.assertIn("memory", resp)
+        # после освобождения по простою перезагрузка разрешена: released (guard) не ставится
+        self.assertEqual(w.neural_gate({}, False), "load")
+
+    def test_client_registers_atexit(self):
+        """Выход процесса-хозяина обязан забирать worker с собой."""
+        wc = importlib.import_module("worker_client")
+        calls = []
+        real = wc.atexit.register
+        try:
+            wc.atexit.register = lambda fn, *a: calls.append(fn)
+            c = wc.WorkerClient(python=sys.executable)
+            self.assertEqual(calls, [c.stop])
+        finally:
+            wc.atexit.register = real
 
 
 if __name__ == "__main__":

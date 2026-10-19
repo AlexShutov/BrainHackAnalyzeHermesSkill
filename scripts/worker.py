@@ -18,8 +18,20 @@ JSON-lines по stdin/stdout.
 
 PSYCH_WORKER_NO_MODELS=1 — не грузить модели: поиск только лексический, классификатор
 пустой. Это режим тестов и деградации, когда ONNX/fastembed недоступны.
+
+Жизненный цикл (замер на этой машине, 2026-10-19: worker с тремя HF-моделями — 2.34 ГБ
+RSS, с fastembed и ONNX-классификатором — 3.39 ГБ на живой процесс): worker уходит по
+простою (`PSYCH_WORKER_IDLE`, default 300 с), по EOF клиента, и по смерти родителя; при
+превышении `PSYCH_WORKER_RSS_LIMIT_KB` (default 3 600 000 КБ — выше штатного RSS, иначе
+guard срабатывал бы на первом запросе и нейро-слой никогда бы не работал) worker отдаёт
+HF-модели и продолжает работать лексиконом и классификатором; после простоя нейро
+(`PSYCH_WORKER_NEURAL_IDLE`, default 120 с) модели тоже освобождаются, но следующий
+запрос вправе загрузить их заново. Заметка об освобождении присоединяется к ответу на
+запрос, а не пишется отдельной строкой: отдельная строка сдвинула бы ответы клиента.
+Клиент регистрирует atexit: выход процесса-хозяина забирает worker с собой — висячий
+тёплый процесс на 16 ГБ машине это память, которую никто не отдаст до конца жизни процесса.
 """
-import json, os, sys, time
+import gc, json, os, select, subprocess, sys, time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import markers, rag_core as R
@@ -27,6 +39,99 @@ from util import OPERATING_POINT   # рабочая точка — одна дл
 
 NO_MODELS = os.environ.get("PSYCH_WORKER_NO_MODELS") == "1"
 CHUNK = R.CHUNK
+
+# Жизненный цикл worker. Замер на этой машине (2026-10-19): живой worker с тремя
+# HF-моделями — 2.34 ГБ RSS. На 16 ГБ машине это не «тёплый кэш», а риск свопa,
+# поэтому worker обязан (1) уходить по простою, (2) уходить по EOF клиента,
+# (3) уходить, если родитель умер, (4) отдавать модели при превышении лимита.
+IDLE_TIMEOUT = int(os.environ.get("PSYCH_WORKER_IDLE", "300"))
+# Лимит обязан быть ВЫШЕ штатного RSS загруженного worker. Замеры на этой машине:
+# 2.34 ГБ (три HF-модели) и 3.39 ГБ (fastembed + ONNX-классификатор + три HF-модели в
+# одном процессе). Иначе guard срабатывает на первом же запросе и нейро-слой никогда не
+# работает — это и произошло при живой проверке: анализ загрузил модели, guard тут же их
+# отдал, и доставляемые числа получил словарь. Guard — сигнал утечки или роста, а не
+# выключение слоя; «не сидеть в памяти» обеспечивает выход по простою (IDLE_TIMEOUT).
+RSS_LIMIT_KB = int(os.environ.get("PSYCH_WORKER_RSS_LIMIT_KB", "3600000"))
+# Память на паузе: долгий хозяин (гейтвей) живёт часами, и 3.4 ГБ модельного RSS в нём —
+# занятая память, а не тёплый кэш. Модели освобождаются после простоя, процесс остаётся
+# (лексикон + классификатор), следующий запрос вправе загрузить заново.
+NEURAL_IDLE_RELEASE = int(os.environ.get("PSYCH_WORKER_NEURAL_IDLE", "120"))
+
+
+def current_rss_kb():
+    """Текущий RSS, а не пик. `ru_maxrss` на macOS — максимум за жизнь процесса, он
+    никогда не уменьшается: пиковый guard сработал бы один раз и остался «вечно
+    превышенным» даже после освобождения моделей."""
+    try:
+        out = subprocess.run(["ps", "-o", "rss=", "-p", str(os.getpid())],
+                             capture_output=True, text=True).stdout.strip()
+        return int(out) if out.isdigit() else 0
+    except Exception:
+        return 0
+
+
+def attach_pending(resp, pending):
+    """Заметка об освобождении памяти едет В ОТВЕТЕ на запрос, а не отдельной строкой:
+    строка, посланная между запросами, сдвинула бы ответы клиента (тот же баг, что и с
+    отдельным emit guard)."""
+    if not pending:
+        return False
+    resp["memory"] = pending
+    return True
+
+
+def idle_release_due(last_neural, now, seconds=None):
+    """Пора освободить модели после простоя (процесс остаётся). Отдельно от guard:
+    guard — превышение лимита и постоянный отказ от перезагрузки, здесь — память на
+    паузе, и следующий запрос вправе загрузить модели заново."""
+    return (now - last_neural) >= (NEURAL_IDLE_RELEASE if seconds is None else seconds)
+
+
+def guard_memory(resp, state):
+    """Память добавляется к ТОМУ ЖЕ ответу, а не отдельным сообщением. Отдельный emit
+    сдвигает ответы клиента: следующий запрос читает строку предыдущего (замер живым
+    прогоном — после guard ответ на `markers` пришёл как `neural released`). Возвращает
+    True, если освобождение произошло."""
+    if not state or not should_release(current_rss_kb(), RSS_LIMIT_KB):
+        return False
+    rss = current_rss_kb()
+    freed = release_neural(state)
+    resp["memory"] = {"rss_kb": rss, "released_kb": freed, "limit_kb": RSS_LIMIT_KB,
+                      "neural_released": True}
+    return True
+
+
+def neural_gate(neural, released):
+    """Что делать на запросе neural. `released` важнее пустого состояния: память уже
+    отдана по guard, и молча перезагрузить модели нельзя — это вернуло бы те же гигабайты,
+    ради которых их освободили. Без этого порядка пустой dict после освобождения
+    интерпретировался бы как «загрузить заново»."""
+    if released:
+        return "released"
+    if not neural:
+        return "load"
+    return "run"
+
+
+def parent_changed(ppid0):
+    """Родитель умер — сирота переродится (getppid изменится на launchd/init). Без этой
+    проверки worker переживает хозяина и держит модели после его смерти."""
+    return os.getppid() != ppid0
+
+
+def should_release(rss_kb, limit_kb):
+    return rss_kb > limit_kb
+
+
+def release_neural(state):
+    """Освободить модели и вернуть количество освобождённых КБ (оценка по RSS
+    до и после gc). Возвращает 0, если освобождать нечего."""
+    if not state:
+        return 0
+    before = current_rss_kb()
+    state.clear()
+    gc.collect()
+    return max(0, before - current_rss_kb())
 
 
 def load_embedding():
@@ -90,6 +195,7 @@ def main():
     cls = load_classifier()
     matrix = None
     neural = None
+    neural_released = False
 
     def cached_matrix():
         nonlocal matrix
@@ -106,53 +212,45 @@ def main():
         sys.stdout.write(json.dumps(obj, ensure_ascii=False) + "\n")
         sys.stdout.flush()
 
-    emit({"ok": True, "warm_ms": round((time.time() - t0) * 1000),
-          "embedding": emb is not None, "classifier": cls is not None,
-          "docs": con.execute("SELECT COUNT(*) FROM docs").fetchone()[0]})
-
-    for line in sys.stdin:
-        line = line.strip()
-        if not line:
-            continue
-        try:
-            req = json.loads(line)
-        except Exception:
-            emit({"ok": False, "error": "bad json"})
-            continue
+    def dispatch(req):
+        """Один ответ на один запрос. Ops обязаны ВОЗВРАЩАТЬ dict, а не emit: иначе
+        memory guard пишет вторую строку и клиент читает ответ не своего запроса."""
+        nonlocal neural, neural_released
         op = req.get("op")
         if op == "ping":
-            emit({"ok": True})
-        elif op == "search":
+            return {"ok": True}
+        if op == "search":
             q = req.get("query") or ""
             chunks = req.get("chunks") or [q]
             qvecs = [list(emb.embed([c]))[0] for c in chunks] if emb else [None] * len(chunks)
-            emit({"ok": True, "results": R.merge_chunked(chunks, con=con, qvecs=qvecs,
-                                                         matrix=cached_matrix())})
-        elif op == "markers":
-            emit({"ok": True, "markers": markers.scan(req.get("text") or "")})
-        elif op == "classify":
+            return {"ok": True, "results": R.merge_chunked(chunks, con=con, qvecs=qvecs,
+                                                           matrix=cached_matrix())}
+        if op == "markers":
+            return {"ok": True, "markers": markers.scan(req.get("text") or "")}
+        if op == "classify":
             text = req.get("text") or ""
             minp = float(req.get("min", OPERATING_POINT))
             if cls is None:
-                emit({"ok": True, "classification": [], "model": None})
-            elif req.get("gated"):
+                return {"ok": True, "classification": [], "model": None}
+            if req.get("gated"):
                 res = []
                 for i, p in cls.gated_paragraphs(text):
                     labels = cls.classify(p, min_conf=minp)
                     if labels:
                         res.append({"para": i, "text": p, "labels": labels})
-                emit({"ok": True, "classification": res})
-            else:
-                emit({"ok": True, "classification": cls.classify(text, min_conf=minp)})
-        elif op == "neural":
+                return {"ok": True, "classification": res}
+            return {"ok": True, "classification": cls.classify(text, min_conf=minp)}
+        if op == "neural":
             if NO_MODELS:
-                emit({"ok": False, "error": "no models"})
-                continue
-            if neural is None:
+                return {"ok": False, "error": "no models"}
+            state = neural_gate(neural, neural_released)
+            if state == "released":
+                return {"ok": False, "error": "neural released by memory guard",
+                        "released": True}
+            if state == "load":
                 neural = load_neural()
             if not neural:
-                emit({"ok": False, "error": "neural unavailable"})
-                continue
+                return {"ok": False, "error": "neural unavailable"}
             import neural_pass as NP
             texts = req.get("texts") or []
             models = req.get("models") or list(NEURAL_MODELS)
@@ -164,9 +262,69 @@ def main():
                 tok, model, labels, multi = neural[name]
                 out[name] = [row["all"] for row in
                              NP.infer(tok, model, labels, texts, multi, name, batch)]
-            emit({"ok": True, "scores": out, "loaded_once": True})
+            return {"ok": True, "scores": out, "loaded_once": True}
+        return {"ok": False, "error": f"unknown op: {op}"}
+
+    emit({"ok": True, "warm_ms": round((time.time() - t0) * 1000),
+          "embedding": emb is not None, "classifier": cls is not None,
+          "docs": con.execute("SELECT COUNT(*) FROM docs").fetchone()[0],
+          "idle_s": IDLE_TIMEOUT, "rss_limit_kb": RSS_LIMIT_KB})
+
+    ppid0 = os.getppid()
+    stdin_fd = sys.stdin.fileno()
+    buf = b""
+    last_request = time.time()
+    last_neural = last_request
+    pending = None
+    while True:
+        if b"\n" in buf:
+            line, buf = buf.split(b"\n", 1)
         else:
-            emit({"ok": False, "error": f"unknown op: {op}"})
+            r, _, _ = select.select([stdin_fd], [], [], min(IDLE_TIMEOUT, NEURAL_IDLE_RELEASE))
+            if not r:
+                now = time.time()
+                if os.environ.get("PSYCH_WORKER_DEBUG"):
+                    sys.stderr.write(f"[idle] now-last_request={now-last_request:.1f} "
+                                     f"idle={IDLE_TIMEOUT} neural_idle={NEURAL_IDLE_RELEASE} "
+                                     f"neural={'yes' if neural else 'no'}\n")
+                if now - last_request >= IDLE_TIMEOUT:
+                    emit({"ok": False, "error": "idle timeout", "idle_s": IDLE_TIMEOUT})
+                    break
+                if neural and idle_release_due(last_neural, now):
+                    # память на паузе: долгий хозяин (гейтвей) живёт часами, и 3.4 ГБ
+                    # модельного RSS в нём — это не «тёплый кэш», а занятая память.
+                    # Освобождаем модели, процесс остаётся (лексикон + классификатор),
+                    # и следующий запрос вправе загрузить заново — это не guard
+                    freed = release_neural(neural)
+                    pending = {"released_kb": freed, "idle_release": True}
+                continue
+            chunk = os.read(stdin_fd, 65536)
+            if not chunk:
+                # EOF: клиент умер. Worker обязан уйти, а не сидеть с моделями —
+                # на 16 ГБ машине висячий тёплый процесс это гигабайты, которые никто
+                # не отдаст до конца жизни процесса
+                break
+            buf += chunk
+            continue
+        if not line.strip():
+            continue
+        if os.getppid() != ppid0:
+            emit({"ok": False, "error": "parent gone"})
+            break
+        try:
+            req = json.loads(line)
+        except Exception:
+            emit({"ok": False, "error": "bad json"})
+            continue
+        last_request = time.time()
+        if req.get("op") == "neural":
+            last_neural = last_request
+        resp = dispatch(req)
+        if attach_pending(resp, pending):
+            pending = None
+        if guard_memory(resp, neural):
+            neural_released = True
+        emit(resp)
     con.close()
 
 

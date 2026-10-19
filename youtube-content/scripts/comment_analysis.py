@@ -181,13 +181,23 @@ def neural_runner(models=NEURAL_MODELS, client=None, loader=None):
         r = c.call("neural", texts=list(texts), models=list(models), batch=batch)
         if r and r.get("ok"):
             return r["scores"]
+        if r and r.get("released"):
+            # память уже отдана memory guard worker: перезагружать модели здесь нельзя —
+            # это вернуло бы те же гигабайты, ради которых их освободили
+            warm_run.released = True
+            return None
         return local_run(texts, batch)      # worker умер — деградация, не отказ
+    warm_run.released = False
 
     try:
         import worker_client
         c = client or worker_client.client()
         warm = c.call("neural", texts=["прогрев"], models=list(models))
         if warm and warm.get("ok"):
+            return warm_run
+        if warm and warm.get("released"):
+            # память уже отдана worker по guard: загрузка в этом процессе вернула бы
+            # те же гигабайты — слой остаётся лексиконом, и блок называет причину
             return warm_run
     except Exception:
         pass
@@ -278,6 +288,9 @@ def analyze(rows, runner=None, device_by_text=None, use_neural=True, use_markers
     # числа получены словарём, а не моделью — об этом говорится отдельной строкой.
     # Раньше block() этого не говорил, и лексикон подавался как нейро-вердикт.
     neural_unavailable = bool(use_neural) and not scores
+    # отдельный случай: слой был доступен, но worker отдал память по guard —
+    # доставляемый блок обязан называть причину, а не писать «модели недоступны»
+    neural_released = bool(getattr(runner, "released", False))
 
     cats = []
     unmapped = []
@@ -324,7 +337,8 @@ def analyze(rows, runner=None, device_by_text=None, use_neural=True, use_markers
 
     threads, by_id = CS.build_threads(tagged)
     thread_lines, overall, weighted = CS.thread_homogeneity(threads, by_id)
-    return {"layer": layer, "neural_unavailable": neural_unavailable, "count": len(rows),
+    return {"layer": layer, "neural_unavailable": neural_unavailable,
+            "neural_released": neural_released, "count": len(rows),
             "mood": mood_pct, "cross_check": cross_pct, "overall": overall,
             "weighted": weighted, "threads": thread_lines, "comments": tagged,
             "unmapped": unmapped}
@@ -345,8 +359,12 @@ def block(res):
         lines.append("Кросс-проверка лексиконом: " +
                      ", ".join(f"{c} {p}%" for c, p in res["cross_check"].items()))
     elif res.get("neural_unavailable"):
-        lines.append("Нейро-слой был запрошен, но остался недоступен — числа получены "
-                     "лексиконом (словарём), а не моделью.")
+        if res.get("neural_released"):
+            lines.append("Нейро-слой был выключен memory guard worker (освобождена память) — "
+                         "числа получены лексиконом (словарём), а не моделью.")
+        else:
+            lines.append("Нейро-слой был запрошен, но остался недоступен — числа получены "
+                         "лексиконом (словарём), а не моделью.")
     devices = {}
     for c in res["comments"]:
         if c.get("marketing"):

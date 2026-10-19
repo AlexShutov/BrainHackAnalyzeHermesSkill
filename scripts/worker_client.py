@@ -12,7 +12,7 @@
 буферизованной строке показал бы «нет данных», а readline завис бы. Здесь буфер свой, и
 select работает честно.
 """
-import json, os, select, subprocess, sys
+import atexit, json, os, select, subprocess, sys
 
 SKILL_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 WORKER = os.path.join(SKILL_DIR, "scripts", "worker.py")
@@ -42,6 +42,9 @@ class WorkerClient:
         self.p = None
         self.buf = b""
         self.hello = None
+        # выход процесса-хозяина обязан забирать worker с собой: без этого живой процесс
+        # остаётся с моделями (замер: 2.34 ГБ RSS) после смерти клиента
+        atexit.register(self.stop)
 
     def start(self):
         try:
