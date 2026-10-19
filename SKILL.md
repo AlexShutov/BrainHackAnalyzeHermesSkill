@@ -1,7 +1,7 @@
 ---
 name: brain-hack-analyze
-description: "Use when analyzing text/messages with the video tag system."
-version: 1.0.0
+description: "Use when analyzing text/messages with the video tag system. Marker layer + local RAG + ONNX classifier, behavior tests."
+version: 1.1.0
 author: Алексей (via Hermes)
 license: MIT
 platforms: [linux, macos, windows]

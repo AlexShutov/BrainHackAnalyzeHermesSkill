@@ -1,7 +1,7 @@
 ---
 name: youtube-content
-description: "Transcripts to tagged analyses: manipulation, ads, comments."
-version: 2.4.0
+description: "Transcripts to tagged analyses: manipulation, ads, comments. Neural comment layer through one entry point on all three paths."
+version: 2.5.0
 author: Teknium (teknium1), Hermes Agent
 license: MIT
 platforms: [linux, macos, windows]
