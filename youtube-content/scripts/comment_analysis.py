@@ -40,6 +40,11 @@ NEURAL_BUCKET = {
     "gratitude": "радость", "joy": "радость", "love": "радость", "optimism": "радость",
     "pride": "радость", "relief": "радость",
     "neutral": "нейтрально", "realization": "нейтрально", "surprise": "нейтрально",
+    # curiosity — интерес и вовлечённость БЕЗ оценки: это не stance, поэтому метка идёт
+    # в «нейтрально» и не считается содержательной в однородности треда. Раньше её не было
+    # в корзине (27 из 28), и комментарий молча уходил в лексикон — доставляемые цифры
+    # смешивали два слоя, не говоря об этом.
+    "curiosity": "нейтрально",
 }
 
 # Пороги правила: 🤮 — высокая токсичность (p >= 0.70 по insult/obscenity/threat или
@@ -208,12 +213,18 @@ def analyze(rows, runner=None, device_by_text=None, use_neural=True, use_markers
     neural_unavailable = bool(use_neural) and not scores
 
     cats = []
+    unmapped = []
     for i, r in enumerate(rows):
         lex_cat, _ = CS.classify(r.get("text") or "")
         cat = lex_cat
         if scores and scores.get("emotion") and scores["emotion"][i]:
             top = max(scores["emotion"][i].items(), key=lambda kv: kv[1])
-            cat = NEURAL_BUCKET.get(top[0], lex_cat)
+            if top[0] in NEURAL_BUCKET:
+                cat = NEURAL_BUCKET[top[0]]
+            else:
+                # метка модели без корзины: число по этому комментату получил словарь,
+                # и об этом говорится в доставляемом блоке — молча смешивать слои нельзя
+                unmapped.append(top[0])
         cats.append(cat)
 
     mood = {}
@@ -239,7 +250,8 @@ def analyze(rows, runner=None, device_by_text=None, use_neural=True, use_markers
     thread_lines, overall, weighted = CS.thread_homogeneity(threads, by_id)
     return {"layer": layer, "neural_unavailable": neural_unavailable, "count": len(rows),
             "mood": mood_pct, "cross_check": cross_pct, "overall": overall,
-            "weighted": weighted, "threads": thread_lines, "comments": tagged}
+            "weighted": weighted, "threads": thread_lines, "comments": tagged,
+            "unmapped": unmapped}
 
 
 def block(res):
@@ -248,6 +260,11 @@ def block(res):
     lines = [f"Настроение комментариев ({res['count']}): " +
             ", ".join(f"{c} {p}%" for c, p in res["mood"].items()) +
             f". Слой: {res['layer']}."]
+    if res.get("unmapped"):
+        # честность: если у метки модели нет корзины, число по этому комментату
+        # получил словарь — об этом говорится отдельной строкой, а не молча
+        lines.append("Часть цифр получена лексиконом: метка модели без корзины — "
+                     + ", ".join(sorted(set(res["unmapped"]))) + f" ({len(res['unmapped'])})")
     if res["layer"] == "neural":
         lines.append("Кросс-проверка лексиконом: " +
                      ", ".join(f"{c} {p}%" for c, p in res["cross_check"].items()))

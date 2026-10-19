@@ -949,6 +949,39 @@ class CommentAnalysisTests(unittest.TestCase):
         self.assertEqual(res["mood"].get("злость"), 33)
         self.assertTrue(res["cross_check"], "кросс-проверка лексиконом пропала")
 
+    def test_curiosity_has_a_bucket_and_mapping_is_total(self):
+        """Правило: нейро-метка переводится в корзину доставляемого блока. Было 27 из 28:
+        `curiosity` без корзины — комментарий молча уходил в лексикон, и доставляемые
+        цифры смешивали два слоя, не говоря об этом."""
+        missing = [l for l in neural_pass.LABELS["emotion"] if l not in CA.NEURAL_BUCKET]
+        self.assertEqual(missing, [], f"метки модели без корзины: {missing}")
+
+        # кейс, где «как есть» (лексикон) и «по правилу» (нейро) дают РАЗНЫЙ результат
+        text = "как он это сделал — интересно, но плохо"
+        lex = comment_sentiment.classify(text)[0]
+        self.assertNotEqual(lex, "нейтрально",
+                            "тест бессмысленен: оба слоя дают одно и то же")
+        def runner(texts):
+            return {"emotion": [{"curiosity": 0.9} for _ in texts],
+                    "toxicity": [{"non-toxic": 0.9} for _ in texts],
+                    "sarcasm": [{"neutral": 0.9} for _ in texts]}
+        res = CA.analyze([{"id": "R1", "author": "a", "text": text, "parent": "root", "likes": 0}],
+                         runner=runner, use_markers=False)
+        self.assertEqual(res["comments"][0]["cat"], "нейтрально",
+                         "curiosity без корзины — комментарий ушёл в лексикон")
+        self.assertEqual(res["unmapped"], [], "метка обязана быть покрыта корзиной")
+
+        # метка вне списка (пропуск в id2label) — блок обязан сказать, что число получил словарь
+        def runner2(texts):
+            return {"emotion": [{"class_99": 0.9} for _ in texts],
+                    "toxicity": [{"non-toxic": 0.9} for _ in texts],
+                    "sarcasm": [{"neutral": 0.9} for _ in texts]}
+        res2 = CA.analyze([{"id": "R1", "author": "a", "text": text, "parent": "root", "likes": 0}],
+                           runner=runner2, use_markers=False)
+        out = CA.block(res2)
+        self.assertIn("получена лексиконом", out, "блок молчит о смешивании слоёв")
+        self.assertIn("class_99", out, "блоку нечего назвать")
+
     def test_tag_priority(self):
         import comment_analysis as CA
         res = CA.analyze(self.ROWS, runner=self.fake_runner())
