@@ -114,6 +114,14 @@ plugsrc = (clone / "plugin/psych-rag/__init__.py").read_text(encoding="utf-8")
 check("plugin gate constants present on the clean copy",
       "MAX_CHARS = 4096" in plugsrc and "MAX_PARAS = 12" in plugsrc and "RECHECK_SECONDS = 86400" in plugsrc)
 
+# 8. плагин-команда проверяется поведенчески на клонированной копии, а не текстом исходника
+r = subprocess.run([PY, str(scripts / "tests/test_plugin_command.py")], capture_output=True, text=True, timeout=120)
+m = re.search(r"Ran (\d+) tests", r.stderr or "")
+failed_p = len(re.findall(r"^(FAIL|ERROR):", r.stderr or "", flags=re.M))
+check("plugin command checked behaviorally on the clean copy",
+      r.returncode == 0 and (clone / "plugin/analyze/__init__.py").exists(),
+      f"Ran {m.group(1) if m else '?'} tests, failures={failed_p}")
+
 print(f"clean install: {len(res) - len(fails)}/{len(res)}")
 for name, ok, d in res:
     print(("PASS " if ok else "FAIL ") + name + ((" — " + d) if d else ""))
