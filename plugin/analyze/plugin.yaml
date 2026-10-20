@@ -1,0 +1,8 @@
+name: analyze
+version: 1.1.0
+description: "Slash command /analyze <ссылка на видео> — запускает разбор навыка через Python-скрипт без хода основной LLM; обработчик возвращает None, потому что сообщение доставляет скрипт одним сообщением."
+author: Hermes Agent
+kind: standalone
+provides_hooks: []
+provides_commands:
+  - analyze
