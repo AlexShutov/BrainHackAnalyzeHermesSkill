@@ -345,6 +345,29 @@ class TestFixed(SnapshotMixin, unittest.TestCase):
         self.assertIn("может быть неполной", CA.block(res3),
                       "блок молчит о неподтверждённой полноте")
 
+    def test_delivered_comment_block_has_no_per_thread_lines(self):
+        """Поведение (правило пользователя, 2026-10-20): доставляется только общая
+        информация — построчная сводка по тредам в сообщение не ходит. Кейс расхождения:
+        два измеримых треда на прежнем пути дают строки «тред N», по правилу их нет,
+        а общая информация (число активных тредов и среднее) остаётся."""
+        rows = [
+            {"id": "1", "parent": "root", "author": "a", "text": "класс",
+             "likes": 0, "timestamp": 0, "pinned": False},
+            {"id": "1.1", "parent": "1", "author": "b", "text": "класс",
+             "likes": 0, "timestamp": 1, "pinned": False},
+            {"id": "2", "parent": "root", "author": "c", "text": "фу",
+             "likes": 0, "timestamp": 2, "pinned": False},
+            {"id": "2.1", "parent": "2", "author": "d", "text": "фу",
+             "likes": 0, "timestamp": 3, "pinned": False},
+        ]
+        res = CA.analyze(rows, use_neural=False)
+        self.assertTrue(any(t["homogeneity"] is not None for t in res["threads"]),
+                        "кейс не доказывает расхождение: нет измеримого треда")
+        b = CA.block(res)
+        self.assertNotIn("тред ", b, "построчная сводка по тредам попала в сообщение")
+        self.assertIn("Активных тредов", b, "общая информация потеряна")
+        self.assertIn("в среднем по тредам", b, "общая строка однородности потеряна")
+
     def test_comment_sentiment_passes_the_slice_to_the_block(self):
         """Поведение: --limit обрезает только вывод, и срез обязан доходить до блока
         как неполная выборка (fetched > analyzed). Тест без сети: транспорт подменён,

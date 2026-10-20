@@ -396,13 +396,9 @@ def block(res):
     else:
         lines.append(f"Однородность в треде: в среднем по тредам {res['overall']}% "
                      f"(взвешенная {res['weighted']}%).")
-    for t in res["threads"]:
-        if t["homogeneity"] is None:
-            lines.append(f"тред {t['size']} — не измеряется "
-                         f"(нейтральный тред, содержательных {t.get('stance', 0)})")
-        else:
-            lines.append(f"тред {t['size']} — доминирует {t['dominant']}, "
-                         f"однородность {t['homogeneity']}%")
+    # правило пользователя (2026-10-20): доставляется только общая информация —
+    # построчная сводка по тредам в сообщение не ходит (ники запрещены, а строки
+    # «тред N» читатель не просил); треды остаются в данных и в записи журнала
     counts = {}
     for c in res["comments"]:
         counts[c["tag"]] = counts.get(c["tag"], 0) + 1
