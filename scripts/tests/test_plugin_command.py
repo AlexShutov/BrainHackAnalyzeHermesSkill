@@ -41,7 +41,9 @@ class PluginCommandTests(unittest.TestCase):
         self.home = tempfile.mkdtemp()
         self._saved_env = {k: os.environ.get(k) for k in ("HOME", "HERMES_HOME")}
         self.mod = load_plugin(self.home)
-        self._saved = {"SPAWN": getattr(self.mod, "SPAWN", None)}
+        self._saved = {"SPAWN": getattr(self.mod, "SPAWN", None),
+                       "INJECT": getattr(self.mod, "INJECT", None),
+                       "session_key": self.mod.session_key}
 
     def tearDown(self):
         for k, v in self._saved.items():
@@ -97,6 +99,48 @@ class PluginCommandTests(unittest.TestCase):
         got = self.mod.script_candidates()[0]
         self.assertTrue(got.startswith(self.home), got)
         self.assertNotIn("/Users/alex/.hermes/skills", got)
+
+    # -- ссылка обязана дойти до навыка -----------------------------------
+    def test_link_extracted_from_args_not_read_as_whole(self):
+        got = self.mod.extract_url("Анализ https://www.youtube.com/watch?v=X-uxY8XXjWw с таймкодами")
+        self.assertEqual(got, "https://www.youtube.com/watch?v=X-uxY8XXjWw")
+
+    def test_raw_video_id_becomes_link(self):
+        self.assertEqual(self.mod.extract_url("X-uxY8XXjWw"),
+                         "https://www.youtube.com/watch?v=X-uxY8XXjWw")
+
+    def test_link_reaches_the_session_when_pipeline_absent(self):
+        """Расхождение: без конвейера прежний обработчик возвращал None — dispatch
+        плагин-команды идёт до хода агента, и None означает «ничего не доставлено»,
+        то есть навык ссылку не увидел бы вообще."""
+        seen = []
+        self.mod.session_key = lambda: "agent:main:telegram:dm:362122320"
+
+        def inject(content, role, session_key=None):
+            seen.append((content, role, session_key))
+            return True
+
+        self.assertIsNone(self.mod.run("https://www.youtube.com/watch?v=X-uxY8XXjWw", inject=inject))
+        self.assertEqual(len(seen), 1)
+        content, role, key = seen[0]
+        self.assertIn("X-uxY8XXjWw", content)
+        self.assertEqual(role, "user")
+        self.assertEqual(key, "agent:main:telegram:dm:362122320")
+
+    def test_denied_injection_is_reported_not_swallowed(self):
+        self.mod.session_key = lambda: "agent:main:telegram:dm:362122320"
+        out = self.mod.run("https://youtu.be/X-uxY8XXjWw", inject=lambda *a, **k: False)
+        self.assertIn("не получил ссылку", out)
+        self.assertIn("allow_gateway_injection", out)
+
+    def test_missing_session_key_is_reported(self):
+        self.mod.session_key = lambda: ""
+        out = self.mod.run("https://youtu.be/X-uxY8XXjWw", inject=lambda *a, **k: True)
+        self.assertIn("нет ключа сессии", out)
+
+    def test_no_pipeline_and_no_agent_says_so(self):
+        out = self.mod.run("https://youtu.be/X-uxY8XXjWw", inject=None, ctx=None)
+        self.assertIn("ход агента недоступен", out)
 
     def test_source_has_no_absolute_author_path(self):
         with open(PLUGIN_FILE) as f:
