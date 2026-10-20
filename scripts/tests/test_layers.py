@@ -1356,13 +1356,15 @@ class TestOpenBugs(SnapshotMixin, unittest.TestCase):
                 json.dump({"chat_id": "123", "message_id": 5, "preview": "превью"}, f)
 
             # A: heartbeat с той же строкой — guard обязан сработать, скрипт не падает
-            out = run(["status_post.py", "update", "k", "статус [SAME]"], "out")
+            # (прогресс по умолчанию запрещён правилом 2026-10-20, поэтому guard проверяется
+            # на ветке явного разрешения — без флага до api() дело не доходит)
+            out = run(["status_post.py", "update", "k", "статус [SAME]", "--allow-progress"], "out")
             self.assertIn("updated", out,
                           "guard недостижим: api() выходит на не-429 HTTPError, "
                           "heartbeat с той же строкой роняет скрипт")
 
             # B: реальная ошибка не проглатывается тем же guard-ом
-            err = run(["status_post.py", "update", "k", "статус [TOOLONG]"], "err")
+            err = run(["status_post.py", "update", "k", "статус [TOOLONG]", "--allow-progress"], "err")
             self.assertIn("HTTP 400", err, "настоящая ошибка обязана остаться ошибкой")
 
             # C: dry-run печатает, что отправил бы, и не пишет ничего
@@ -1373,6 +1375,52 @@ class TestOpenBugs(SnapshotMixin, unittest.TestCase):
             self.assertEqual(calls, [], "dry-run обязан не делать сетевых запросов")
             self.assertFalse(os.path.exists(os.path.join(status_post.STATE_DIR, "drykey.json")),
                              "dry-run обязан ничего не писать")
+        finally:
+            (status_post._urlopen, status_post.bot_token, status_post.STATE_DIR) = orig
+
+    def test_status_post_progress_delivery_is_blocked_by_default(self):
+        """Правило пользователя (2026-10-20): во время анализа ничего не доставляется —
+        сообщение приходит одно, в конце. Без флага --allow-progress скрипт не отправляет
+        и не пишет состояние; с флагом — отправляет. Проверяются обе ветки; mock-transport
+        считает вызовы, иначе проверка сводится к чтению исходника."""
+        calls = []
+
+        def fake(req, timeout=15):
+            calls.append(req)
+
+            class Resp:
+                def __enter__(self): return self
+                def __exit__(self, *a): return False
+                def read(self):
+                    return json.dumps({"ok": True, "result": {"message_id": 7}}).encode()
+            return Resp()
+
+        def run(argv_list):
+            argv, sys.argv = sys.argv, argv_list
+            buf = io.StringIO()
+            try:
+                with contextlib.redirect_stdout(buf):
+                    status_post.main()
+            except SystemExit as e:
+                buf.write(str(e))
+            finally:
+                sys.argv = argv
+            return buf.getvalue()
+
+        orig = (status_post._urlopen, status_post.bot_token, status_post.STATE_DIR)
+        status_post._urlopen, status_post.bot_token = fake, lambda: "T"
+        status_post.STATE_DIR = tempfile.mkdtemp()
+        try:
+            out = run(["status_post.py", "start", "123", "k1", "превью", "статус"])
+            self.assertIn("отменён", out, "запрет доставки прогресса не назван в выводе")
+            self.assertEqual(calls, [], "без флага скрипт сделал сетевой запрос")
+            self.assertFalse(os.path.exists(os.path.join(status_post.STATE_DIR, "k1.json")),
+                             "запрещённый прогресс записал состояние")
+            calls.clear()
+            run(["status_post.py", "start", "123", "k2", "превью", "статус", "--allow-progress"])
+            self.assertEqual(len(calls), 1, "явное разрешение не отправило пост")
+            self.assertTrue(os.path.exists(os.path.join(status_post.STATE_DIR, "k2.json")),
+                            "явное разрешение не записало состояние")
         finally:
             (status_post._urlopen, status_post.bot_token, status_post.STATE_DIR) = orig
 

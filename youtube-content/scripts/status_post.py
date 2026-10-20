@@ -98,7 +98,23 @@ def render(st, status):
     return clamp(st.get("preview"), status)
 
 
-USAGE = "usage: status_post.py start <chat_id> <key> <preview> <status> | update <key> <status> | done <key>"
+USAGE = "usage: status_post.py start <chat_id> <key> <preview> <status> | update <key> <status> | done <key> [--dry-run] [--allow-progress]"
+
+# Правило пользователя (2026-10-20): во время анализа ничего не доставляется —
+# приходит ОДНО сообщение в конце, когда весь разбор готов. Пост-статус (прогресс по
+# ходу) отменён: агент не может обновлять список адекватно. Явное разрешение — флаг
+# --allow-progress; без него скрипт не отправляет и не пишет состояние.
+PROGRESS_DISABLED = ("пост-статус отменён правилом пользователя (2026-10-20): прогресс "
+                     "анализа не доставляется, сообщение приходит одно в конце; "
+                     "явное разрешение — --allow-progress")
+
+
+def progress_gate():
+    """Возвращает True, если доставка прогресса запрещена (и ничего не происходит)."""
+    if "--allow-progress" in sys.argv:
+        return False
+    print(PROGRESS_DISABLED)
+    return True
 
 
 def main():
@@ -114,6 +130,9 @@ def main():
         chat_id, key, preview, status = sys.argv[2], sys.argv[3], sys.argv[4], sys.argv[5]
         if dry:
             print(f"dry-run: sendMessage chat={chat_id}\n{clamp(preview, status)}")
+            progress_gate()
+            return 0
+        if progress_gate():
             return 0
         r = api("sendMessage", chat_id=chat_id, text=clamp(preview, status))
         if not r.get("ok"):
@@ -127,6 +146,8 @@ def main():
             sys.exit(USAGE)
         key = sys.argv[2]
         status = sys.argv[3] if cmd == "update" else "Готово"
+        if progress_gate():
+            return 0
         p = path(key)
         if not os.path.exists(p):
             sys.exit(f"нет поста для ключа {key} — сначала start")
