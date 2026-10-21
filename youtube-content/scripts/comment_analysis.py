@@ -421,7 +421,11 @@ def main():
         return 1
     with open(a.file, encoding="utf-8") as f:
         rows = json.load(f)
-    res = analyze(rows, runner=None if a.no_neural else neural_runner())
+    # Проводка флага — через use_neural, а не через runner=None: analyze() при
+    # use_neural=True пересоздаёт neural_runner() сама, и `--no-neural` не работал —
+    # слой оставался нейро, и блок печатал «Кросс-проверку лексиконом», которой на
+    # лексикон-пути не бывает (лексикон не сверяет сам себя).
+    res = analyze(rows, use_neural=not a.no_neural)
     print(json.dumps(res, ensure_ascii=False, indent=1))
     print(block(res), file=sys.stderr)
     return 0

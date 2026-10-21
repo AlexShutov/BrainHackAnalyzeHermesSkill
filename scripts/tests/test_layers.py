@@ -2158,6 +2158,43 @@ class CommentAnalysisTests(SnapshotMixin, unittest.TestCase):
         self.assertNotIn("None%", out3, "пустой набор печатает None%")
         self.assertIn("не измеряется", out3)
 
+    def test_cli_no_neural_flag_forces_lexicon(self):
+        """Правило: `--no-neural` — явный лексикон. CLI передавал `runner=None`,
+        а analyze() при use_neural=True пересоздавал neural_runner() сам — флаг
+        не работал: вывод говорил «Слой: neural», и печалась кросс-проверка
+        лексиконом, которой на лексикон-пути не бывает. Тест идёт через main()
+        CLI, а не через analyze() напрямую: расхождение жило только в CLI-проводке."""
+        import comment_analysis as CA
+        tmp = tempfile.mkdtemp()
+        path = os.path.join(tmp, "comments.json")
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(self.ROWS, f, ensure_ascii=False)
+        calls = []
+        real = CA.neural_runner
+        CA.neural_runner = lambda: (calls.append(1), self.fake_runner())[1]
+        old_argv = sys.argv
+        try:
+            sys.argv = ["comment_analysis.py", "--file", path, "--no-neural"]
+            out, err = io.StringIO(), io.StringIO()
+            with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+                rc = CA.main()
+            self.assertEqual(rc, 0)
+            self.assertEqual(len(calls), 0, "--no-neural всё равно загрузил нейро-слой")
+            self.assertIn('"layer": "lexicon"', out.getvalue())
+            self.assertNotIn("Кросс-проверка", err.getvalue(),
+                             "лексикон-путь печатает сверку, которой нет")
+            # без флага слой создаётся — проводка не сломана правкой
+            calls.clear()
+            sys.argv = ["comment_analysis.py", "--file", path]
+            with contextlib.redirect_stdout(io.StringIO()), \
+                 contextlib.redirect_stderr(io.StringIO()):
+                CA.main()
+            self.assertGreaterEqual(len(calls), 1,
+                                    "без флага нейро-слой не создаётся вообще")
+        finally:
+            sys.argv = old_argv
+            CA.neural_runner = real
+
 
 # --- жизненный цикл worker: память и утечки (замер: 2.34 ГБ RSS на живой процесс) ---
 
