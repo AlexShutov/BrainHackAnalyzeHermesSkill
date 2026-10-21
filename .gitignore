@@ -10,3 +10,5 @@ psychology/*.txt
 psychology/corpus/manifest.local.json
 __pycache__/
 *.log
+# артефакты живых анализов (preview, расшифровки, результаты) — не часть навыка
+history/
