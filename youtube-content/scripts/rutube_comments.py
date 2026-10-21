@@ -26,7 +26,10 @@ def get_json(url, transport=None):
     if transport is not None:
         return transport(url)
     req = urllib.request.Request(url, headers=UA)
-    return json.loads(urllib.request.urlopen(req, timeout=60).read())
+    # контекстный менеджер: пагинация длинных тредов ходит по страницам API,
+    # и urlopen без with оставлял socket-дескриптор открытым до GC
+    with urllib.request.urlopen(req, timeout=60) as r:
+        return json.loads(r.read())
 
 
 def canonical_rows(payload):

@@ -1184,6 +1184,38 @@ class TestOpenBugs(SnapshotMixin, unittest.TestCase):
                 self.assertFalse(bad, f"{os.path.relpath(os.path.join(base, f), SKILL)}: "
                                       f"незакрытый open() — {bad[:2]}")
 
+    def test_urlopen_is_context_managed(self):
+        """Гигиена ресурсов: urlopen без `with` оставляет socket-дескриптор
+        открытым до GC — на пагинации длинных тредов (rutube_comments ходит по
+        страницам API) дескрипторы копятся. Прежний guard сознательно объявлял
+        urlopen «не open()», поэтому живой случай в rutube_comments проходил
+        все проверки. Скан обязан ловить подмену, а не только констатировать
+        «сейчас чисто»."""
+        rx = re.compile(r"urlopen\(")
+
+        def scan(text):
+            return [ln.strip() for ln in text.splitlines()
+                    if rx.search(ln) and ln.strip().startswith("#") is False
+                    and "urlopen(" in ln and "with " not in ln
+                    and "urlopen = " not in ln and "_urlopen = " not in ln]
+
+        planted = ("req = urllib.request.Request(url)\n"
+                   "data = urllib.request.urlopen(req).read()\n"
+                   "with urllib.request.urlopen(req) as r:\n"
+                   "    data = r.read()\n"
+                   "_urlopen = urllib.request.urlopen\n"
+                   "with _urlopen(req) as r:\n    pass\n")
+        self.assertEqual(scan(planted), ["data = urllib.request.urlopen(req).read()"],
+                         "сканер не ловит подмену — проверка вырождается в «сейчас чисто»")
+        for base in (SCRIPTS, YT):
+            for f in sorted(os.listdir(base)):
+                if not f.endswith(".py"):
+                    continue
+                with open(os.path.join(base, f), encoding="utf-8") as fh:
+                    bad = scan(fh.read())
+                self.assertFalse(bad, f"{os.path.relpath(os.path.join(base, f), SKILL)}: "
+                                      f"urlopen без контекстного менеджера — {bad[:2]}")
+
     def test_fts_triggers_index_later_inserts(self):
         """Поведение: FTS5 с content='docs' синхронизируется полным rebuild или триггерами.
         Прежний ensure_fts не создавал триггеров: документ, добавленный после построения
