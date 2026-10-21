@@ -2245,6 +2245,40 @@ class CommentAnalysisTests(SnapshotMixin, unittest.TestCase):
             sys.argv = old_argv
             CA.neural_runner = real
 
+    def test_block_reports_mova_insertions_as_a_separate_line(self):
+        """Правило: в блоке комментариев вставки мовы — отдельной строкой: количество,
+        доля выборки, язык каждой вставки и вердикт по токсичности, без ников.
+        Форма обязана жить в модуле (block), а не собираться агентом вручную —
+        прежде ukr_detect вообще не вызывался ни одним путём комментариев."""
+        rows = [{"id": "c1", "parent": "root", "author": "a",
+                 "text": "отличный обзор, всё по делу: автор подробно разбирает "
+                         " each шаг, показывает цифры и сравнивает с прошлым годом, "
+                         "советую посмотреть целиком всем кто интересовался темой "
+                         "и хотел бы понять как это устроено изнутри на реальных "
+                         "примерах из практики последних лет", "likes": 0},
+                {"id": "c2", "parent": "root", "author": "b",
+                 "text": "найкращий канал, дивіться неодмінно друзі", "likes": 0},
+                {"id": "c3", "parent": "c1", "author": "c",
+                 "text": "гэта вельмі шмат работы для аднаго чалавека", "likes": 0}]
+        res = CA.analyze(rows, use_neural=False, use_markers=False)
+        out = CA.block(res)
+        self.assertIn("Мова-вставки: 2 из 3 (67%)", out,
+                      "строка вставок с количеством и долей пропала")
+        self.assertIn("uk", out, "язык украинской вставки не назван")
+        self.assertIn("be", out, "язык белорусской вставки не назван")
+        self.assertNotIn("найкращий", out, "цитата комментария в строке вставок")
+        for nick in ("a", "b", "c"):
+            self.assertNotIn(f"@{nick}", out)
+        self.assertIn("токсичность", out.lower(),
+                      "вердикт по токсичности для вставки не назван")
+        # без вставок строки нет; явное отключение языка — тоже
+        out2 = CA.block(CA.analyze([rows[0]], use_neural=False, use_markers=False))
+        self.assertNotIn("Мова-вставки", out2, "строка вставок на чистом русском")
+        out3 = CA.block(CA.analyze(rows, use_neural=False, use_markers=False,
+                                   use_lang=False))
+        self.assertNotIn("Мова-вставки", out3,
+                          "use_lang=False не отключает проход мовы")
+
 
 # --- жизненный цикл worker: память и утечки (замер: 2.34 ГБ RSS на живой процесс) ---
 

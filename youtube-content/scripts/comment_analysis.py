@@ -277,8 +277,57 @@ def tag(text, cat, scores, device=None):
     return "🙂"
 
 
+def _tox_verdict(tox_list, i):
+    """Вердикт по токсичности для строки мова-вставки: нейро-счёты, если слой
+    нейро; на лексикон-пути — честное «не измерялась», а не выдуманный вердикт."""
+    TOX = ("insult", "obscenity", "threat", "dangerous")
+    if not tox_list or not tox_list[i]:
+        return "токсичность: не измерялась (лексикон-слой)"
+    tox = tox_list[i]
+    high = {l: round(v, 2) for l, v in tox.items() if l in TOX and v >= 0.70}
+    if high:
+        return "токсичность: высокая (" + ", ".join(f"{l} {v}" for l, v in sorted(high.items())) + ")"
+    low = {l: round(v, 2) for l, v in tox.items() if l in TOX and v >= 0.30}
+    if low:
+        return "токсичность: пограничная (" + ", ".join(f"{l} {v}" for l, v in sorted(low.items())) + ")"
+    return "токсичность: нет"
+
+
+def lang_insertions(tagged, scores):
+    """Мова-вставки для доставляемого блока: отдельная строка с количеством, долей
+    выборки, языком и вердиктом по токсичности (правило пользователя). Вставка
+    существует только когда большинство выборки русское: если вся выборка на мове,
+    это язык выборки, а не вставка — 🐷 за язык не ставится, разбор обычный.
+    Возвращает None, если детектор недоступен, или список, возможно пустой."""
+    try:
+        import ukr_detect as U
+    except Exception:
+        return None
+    try:
+        _, share_chars, _ = U.majority([r.get("text") or "" for r in tagged])
+        if share_chars > 0.7:
+            return []
+        tox_list = (scores or {}).get("toxicity")
+        out = []
+        for i, r in enumerate(tagged):
+            lang, segs = U.detect_item(r.get("text") or "")
+            langs = set()
+            if lang in ("uk", "be"):
+                langs.add(lang)
+            for cl, _ in segs:
+                if cl in ("uk", "be"):
+                    langs.add(cl)
+            if not langs:
+                continue
+            out.append({"i": i + 1, "langs": sorted(langs),
+                        "verdict": _tox_verdict(tox_list, i)})
+        return out
+    except Exception:
+        return None
+
+
 def analyze(rows, runner=None, device_by_text=None, use_neural=True, use_markers=True,
-           partial=None):
+           partial=None, use_lang=True):
     """rows — каноническая форма комментария. device_by_text — {текст: имя приёма}
     от маркерного слоя (для строки «приём»); без него приём не называется, и тег
     не ставится: правило требует уверенного вердикта, а не совпадения слов.
@@ -359,7 +408,8 @@ def analyze(rows, runner=None, device_by_text=None, use_neural=True, use_markers
             "neural_released": neural_released, "count": len(rows),
             "mood": mood_pct, "cross_check": cross_pct, "overall": overall,
             "weighted": weighted, "threads": thread_lines, "comments": tagged,
-            "unmapped": unmapped, "partial": partial}
+            "unmapped": unmapped, "partial": partial,
+            "insertions": lang_insertions(tagged, scores) if use_lang else None}
 
 
 def block(res):
@@ -409,6 +459,20 @@ def block(res):
     else:
         lines.append(f"Однородность в треде: в среднем по тредам {res['overall']}% "
                      f"(взвешенная {res['weighted']}%).")
+    ins = res.get("insertions")
+    if ins:
+        # правило: вставки мовы — отдельной строкой: количество, доля выборки,
+        # язык и вердикт по токсичности, без ников и без цитат. 🐷 — только за
+        # украинскую вставку; белорусская называется языком без 🐷.
+        parts = []
+        for e in ins:
+            langs = "/".join(e["langs"])
+            pig = " 🐷" if "uk" in e["langs"] else ""
+            parts.append(f"№{e['i']} {langs}{pig} — {e['verdict']}")
+        n, total = len(ins), res["count"]
+        share = round(n * 100 / total) if total else 0
+        lines.append(f"Мова-вставки: {n} из {total} ({share}%) — " +
+                     "; ".join(parts) + ".")
     # правило пользователя (2026-10-20): доставляется только общая информация —
     # построчная сводка по тредам в сообщение не ходит (ники запрещены, а строки
     # «тред N» читатель не просил); треды остаются в данных и в записи журнала
