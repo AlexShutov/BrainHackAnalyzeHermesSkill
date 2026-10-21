@@ -1713,6 +1713,70 @@ class TagRuleTests(SnapshotMixin, unittest.TestCase):
                               f"бытовая фраза без приёма даёт 💸: {text}")
 
 
+class TagDictionaryTests(SnapshotMixin, unittest.TestCase):
+    """Правило: метки — общий словарь двух навыков; при изменении метки обновлять оба SKILL.md.
+
+    Guard-тест на текст исходника, а не поведенческий: таймлайн формирует агент, а не
+    модуль, поэтому поведенческого теста на форму таймлайна здесь быть не может —
+    закрепляется сам словарь. Поведенческие тесты на модули, которые формируют вывод,
+    живут в CommentAnalysisTests (блок комментариев)."""
+
+    KEYWORDS = {
+        "анти-российская пропаганда": "🏳️",
+        "Критика России": "🔴",
+        "Позитив о России": "🍏",
+        "про-российское восхваление": "🐻",
+        "Прогресс человечества": "🟢",
+        "Реклама": "🟤",
+        "Инфоцыганщина": "🦹",
+        "вне общего контекста": "🟣",
+        "Обучающая техническая": "⭐",
+        "расхваливание Украины": "🐷",
+        "восхваление США": "🦅",
+        "Скрываемая тайна": "🔵",
+    }
+
+    def tables(self):
+        out = {}
+        for name, path in (("brain-hack-analyze", os.path.join(SKILL, "SKILL.md")),
+                           ("youtube-content", os.path.join(SKILL, "youtube-content", "SKILL.md"))):
+            rows = {}
+            for line in read(path).splitlines():
+                if not line.startswith("| ") or line.count("|") < 3:
+                    continue
+                cells = [c.strip() for c in line.strip("|").split("|")]
+                if len(cells) == 2 and cells[0] not in ("Tag", "-----"):
+                    rows[cells[0]] = cells[1]
+            out[name] = rows
+        return out
+
+    def test_shared_dictionary_gives_the_same_tag_for_each_category(self):
+        t = self.tables()
+        for kw, emoji in self.KEYWORDS.items():
+            for name, rows in t.items():
+                hit = [e for e, cat in rows.items() if kw in cat]
+                self.assertTrue(hit, f"{name}: категория «{kw}» не размечена в словаре")
+                self.assertEqual(hit, [emoji],
+                                 f"{name}: «{kw}» размечена {hit[0]}, по словарю должно быть {emoji}")
+
+    def test_eggplant_tag_is_replaced_by_white_flag_in_both_skills(self):
+        for name, path in (("brain-hack-analyze", os.path.join(SKILL, "SKILL.md")),
+                           ("youtube-content", os.path.join(SKILL, "youtube-content", "SKILL.md"))):
+            text = read(path)
+            self.assertNotIn("🍆", text, f"{name}: словарь всё ещё содержит прежний тег 🍆")
+            self.assertIn("🏳️", text, f"{name}: 🏳️ не внесён в словарь")
+
+    def test_priority_line_lists_the_replaced_tag(self):
+        text = read(os.path.join(SKILL, "youtube-content", "SKILL.md"))
+        lines = [l for l in text.splitlines() if "Приоритет выбора ОСНОВНОГО тега" in l]
+        self.assertTrue(lines, "строка приоритета выбора тега отсутствует")
+        self.assertIn("🏳️", lines[0], "строка приоритета не перечисляет 🏳️")
+        self.assertNotIn("🍆", lines[0], "строка приоритета перечисляет прежний тег")
+        # правило: 🐷 конкретнее, чем анти-российская пропаганда, — описание ссылается на 🏳️
+        rule = [l for l in text.splitlines() if "use 🐷 (more specific)" in l]
+        self.assertTrue(rule and "🏳️" in rule[0], "правило 🐷 ссылается на прежний тег")
+
+
 class RagPathTests(SnapshotMixin, unittest.TestCase):
     """Поведенческие тесты RAG: FTS5-путь, fallback, резерв устройств, одиночный meta-запрос,
     read-only соединение. Проверяется поведение, а не наличие слов в исходнике."""

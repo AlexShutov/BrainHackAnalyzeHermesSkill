@@ -4,7 +4,7 @@ Naming a device is mandatory for ⚫. Formula: `приём: <название> �
 
 **Structural test (the gate for ⚫):** strip the emotional and rhetorical frame and leave only the facts. If the conclusion no longer follows, the conclusion was induced by a device — mark ⚫. Rhetoric or emotion that carries no conclusion is not ⚫.
 
-The list below is the working taxonomy; the user is finalizing which items are in the closed set (scope of statistical/visual devices and the boundary with 🐻/🦅/🍆). Name devices from it; if a device outside it appears, name it plainly.
+The list below is the working taxonomy; the user is finalizing which items are in the closed set (scope of statistical/visual devices and the boundary with 🐻/🦅/🏳️). Name devices from it; if a device outside it appears, name it plainly.
 
 ## A. Structure of the conclusion
 1. Подмена понятий (equivocation) — a term changes meaning mid-argument.
