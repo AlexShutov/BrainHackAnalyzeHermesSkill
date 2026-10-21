@@ -7,12 +7,14 @@ An empty comment block on a video that obviously has comments is almost never ab
 3. **Login test by cookie names** (cheap, decisive): `SID`/`HSID`/`SSID`/`LOGIN_INFO` present → authenticated. Only `VISITOR_INFO1_LIVE`/`YSC`/`PREF`/`GPS` → anonymous. Login is the user's action; never type credentials, check the vault first.
 4. **JS challenge (separate blocker).** Once cookies are present, an innertube call without attestation returns HTTP 400 `failedPrecondition`. yt-dlp reports `n challenge solving failed` unless a JS runtime solves the challenge: deno is the default; with node the solver must be downloaded (`--remote-components ejs:github`). The info/video path can solve the challenge cleanly while the comments continuation still returns nothing — that combination means the session is anonymous, not that the solver is broken.
 5. **A long hang on the comments continuation is the loop guard firing** (`Detected YouTube comments looping`), not a network timeout. Report it as the gate, never as "the network is slow" and never as a script bug.
+6. **Live streams.** On a `was_live` video a small `comment_count` is real, not the gate: live-chat messages are not comments, so the fetched set is only what was posted as comments. Report the fetched count and name the live chat as not counted — do not call it an auth gate.
 
 ## Working path once the user has logged in
 
 Dump the session cookies through CDP (Chrome encrypts its cookie DB; let Chrome decrypt them itself), convert to Netscape format, and pass them to yt-dlp:
 
-- `Network.getCookies` with `urls=['https://www.youtube.com']` → write `# Netscape HTTP Cookie File` then one line per cookie: `domain\tTRUE\tpath\tTRUE\t<1 if secure else 0>\t<expiry unix>\tname\tvalue`; HttpOnly cookies get the `#HttpOnly_` prefix on the domain field.
+- `Network.getCookies` with `urls=['https://www.youtube.com']` → write `# Netscape HTTP Cookie File` then one line per cookie with SEVEN fields: `domain\tTRUE\tpath\t<1 if secure else 0>\t<expiry unix>\tname\tvalue`. An eighth field (a second `TRUE` after the path) makes yt-dlp skip EVERY line with `invalid length 8` — the file looks written but the run is anonymous, so the comment block comes back as keys-without-text or a tiny count. HttpOnly cookies get the `#HttpOnly_` prefix on the domain field.
+- A Chrome launched with `--no-startup-window` has no page target, so CDP has nothing to answer `Network.getCookies`: create one first with `PUT /json/new?https://www.youtube.com`, then open its `webSocketDebuggerUrl`. A websocket client is not in the standard library — use the interpreter that has `websockets`.
 - `PYTHONPATH=<isolated yt-pylib> python -m yt_dlp --skip-download --write-comments --js-runtimes node --remote-components ejs:github --cookies <file> -j URL`
 - Without a login the only remaining route is the official Data API `commentThreads` (needs an API key — never guess one).
 
