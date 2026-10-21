@@ -2309,6 +2309,68 @@ class CommentAnalysisTests(SnapshotMixin, unittest.TestCase):
             sys.argv = old_argv
             CA.neural_runner = real
 
+    def test_cli_reads_the_canonical_cache_form_and_names_the_partial_sample(self):
+        """CLI блока комментариев читал только массив и падал на кэше, который сам же
+        навык и пишет: write_cache — dict с флагом complete, а не голый массив
+        (AttributeError: 'str' object has no attribute 'get'). Прежний путь обязан
+        падать на том же файле — иначе тест проверяет не расхождение. Теперь оба вида
+        читаются, и неполная выборка называется в доставляемом блоке (правило
+        пользователя), а полный набор не подаётся как неполный."""
+        tmp = tempfile.mkdtemp()
+        cache = {"comments": self.ROWS, "comment_count": len(self.ROWS) + 4,
+                 "complete": False}
+        path = os.path.join(tmp, "cache.json")
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(cache, f, ensure_ascii=False)
+        captured = {}
+        real = CA.analyze
+
+        def spy(rows, **kw):
+            captured["rows"] = rows
+            captured["partial"] = kw.get("partial")
+            return real(rows, runner=self.fake_runner(), **kw)
+
+        CA.analyze = spy
+        old_argv = sys.argv
+        try:
+            sys.argv = ["comment_analysis.py", "--file", path]
+            out, err = io.StringIO(), io.StringIO()
+            with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+                self.assertEqual(CA.main(), 0)
+            self.assertEqual(captured["rows"], self.ROWS,
+                             "CLI потерял комментарии из dict-формы кэша")
+            self.assertEqual(captured["partial"],
+                             {"fetched": len(self.ROWS) + 4, "analyzed": len(self.ROWS)},
+                             "неполная выборка не передана в блок")
+            self.assertIn("Выборка неполная", err.getvalue(),
+                          "доставляемый блок не называет неполную выборку")
+            # прежний путь на том же файле обязан давать другой результат — это и есть
+            # доказательство расхождения, а не проверка наличия строки в исходнике
+            with open(path, encoding="utf-8") as f:
+                raw = json.load(f)
+            try:
+                real(raw, runner=self.fake_runner())
+            except AttributeError:
+                pass
+            else:
+                self.fail("прежний путь (dict как массив) не падает — расхождение не доказано")
+            # массив-форма по-прежнему читается, и полный набор не подаётся как неполный
+            arr_path = os.path.join(tmp, "array.json")
+            with open(arr_path, "w", encoding="utf-8") as f:
+                json.dump(self.ROWS, f, ensure_ascii=False)
+            captured.clear()
+            sys.argv = ["comment_analysis.py", "--file", arr_path]
+            with contextlib.redirect_stdout(io.StringIO()), \
+                 contextlib.redirect_stderr(io.StringIO()):
+                self.assertEqual(CA.main(), 0)
+            self.assertEqual(captured["rows"], self.ROWS,
+                             "массив-форма перестала читаться")
+            self.assertIsNone(captured["partial"],
+                              "полный набор подан как неполная выборка")
+        finally:
+            sys.argv = old_argv
+            CA.analyze = real
+
     def test_block_reports_mova_insertions_as_a_separate_line(self):
         """Правило: в блоке комментариев вставки мовы — отдельной строкой: количество,
         доля выборки, язык каждой вставки и вердикт по токсичности, без ников.

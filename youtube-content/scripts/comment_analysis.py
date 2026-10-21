@@ -497,12 +497,20 @@ def main():
         print("usage: comment_analysis.py --file comments.json [--no-neural]", file=sys.stderr)
         return 1
     with open(a.file, encoding="utf-8") as f:
-        rows = json.load(f)
-    # Проводка флага — через use_neural, а не через runner=None: analyze() при
-    # use_neural=True пересоздаёт neural_runner() сама, и `--no-neural` не работал —
-    # слой оставался нейро, и блок печатал «Кросс-проверку лексиконом», которой на
-    # лексикон-пути не бывает (лексикон не сверяет сам себя).
-    res = analyze(rows, use_neural=not a.no_neural)
+        data = json.load(f)
+    # Канонический кэш (write_cache) — это dict с флагом complete, а не голый массив:
+    # прежний CLI читал только массив и падал на файле, который сам же навык и пишет
+    # (AttributeError: 'str' object has no attribute 'get'). Оба вида поддерживаются,
+    # и неполная выборка называется в доставляемом блоке (правило пользователя).
+    partial = None
+    if isinstance(data, dict):
+        rows = data.get("comments") or []
+        declared = data.get("comment_count")
+        if not data.get("complete") and declared and len(rows) < declared:
+            partial = {"fetched": declared, "analyzed": len(rows)}
+    else:
+        rows = data
+    res = analyze(rows, use_neural=not a.no_neural, partial=partial)
     print(json.dumps(res, ensure_ascii=False, indent=1))
     print(block(res), file=sys.stderr)
     return 0
